@@ -20,17 +20,30 @@ export const CRMProvider = ({ children }) => {
   });
   const [currentUser, setCurrentUser] = useState(() => {
     try {
+      const token = localStorage.getItem('pulseflow_auth_token');
       const saved = localStorage.getItem('pulseflow_auth_user');
-      if (saved) {
+      if (token && saved) {
         const parsed = JSON.parse(saved);
         if (parsed && parsed.id) return parsed;
       }
     } catch {
       // ignore localStorage read errors
     }
-    return INITIAL_TEAM_MEMBERS[0];
+    return null;
   });
-  const [isAuthenticated, setIsAuthenticated] = useState(true);
+  const [isAuthenticated, setIsAuthenticated] = useState(() => {
+    try {
+      const token = localStorage.getItem('pulseflow_auth_token');
+      const saved = localStorage.getItem('pulseflow_auth_user');
+      if (token && saved) {
+        const parsed = JSON.parse(saved);
+        return Boolean(parsed && parsed.id);
+      }
+    } catch {
+      // ignore
+    }
+    return false;
+  });
 
   const [contacts, setContacts] = useState([]);
   const [leads, setLeads] = useState([]);
@@ -75,16 +88,35 @@ export const CRMProvider = ({ children }) => {
       if (Array.isArray(data.teamMembers) && data.teamMembers.length > 0) {
         setTeamMembers(data.teamMembers);
         setCurrentUser((prev) => {
-          const found = data.teamMembers.find(
-            (m) => m.id === prev?.id || (prev?.email && m.email?.toLowerCase() === prev.email.toLowerCase())
-          );
-          const nextUser = found || data.teamMembers[0];
+          if (!prev?.id) return null;
+          let hasToken = false;
           try {
-            localStorage.setItem('pulseflow_auth_user', JSON.stringify(nextUser));
+            hasToken = Boolean(localStorage.getItem('pulseflow_auth_token'));
+          } catch {
+            hasToken = false;
+          }
+          if (!hasToken) return null;
+
+          const found = data.teamMembers.find(
+            (m) => m.id === prev.id || (prev.email && m.email?.toLowerCase() === prev.email.toLowerCase())
+          );
+          if (!found || found.isActive === false) {
+            setIsAuthenticated(false);
+            setAuthToken('');
+            try {
+              localStorage.removeItem('pulseflow_auth_token');
+              localStorage.removeItem('pulseflow_auth_user');
+            } catch {
+              // ignore
+            }
+            return null;
+          }
+          try {
+            localStorage.setItem('pulseflow_auth_user', JSON.stringify(found));
           } catch {
             // ignore
           }
-          return nextUser;
+          return found;
         });
       }
       if (Array.isArray(data.contacts)) {
@@ -463,8 +495,10 @@ export const CRMProvider = ({ children }) => {
   const logout = () => {
     setIsAuthenticated(false);
     setAuthToken('');
+    setCurrentUser(null);
     try {
       localStorage.removeItem('pulseflow_auth_token');
+      localStorage.removeItem('pulseflow_auth_user');
     } catch {
       // ignore
     }
