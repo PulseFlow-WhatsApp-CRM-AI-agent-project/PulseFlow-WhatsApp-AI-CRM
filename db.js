@@ -651,12 +651,99 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
 let isConnected = false;
 let defaultsEnsured = false;
 
+export const DEFAULT_MONGODB_DB_NAME = 'pulseflow_crm';
+
+export async function migrateLegacyTestTeamMembersIfNeeded() {
+  if (mongoose.connection.readyState !== 1) {
+    return {
+      connected: false,
+      legacyCount: 0,
+      migratedCount: 0,
+      targetCountBefore: 0,
+      targetCountAfter: 0,
+      preservedIds: true
+    };
+  }
+
+  try {
+    const client = mongoose.connection.getClient();
+    const targetDbName = mongoose.connection.name || process.env.MONGODB_DB_NAME || DEFAULT_MONGODB_DB_NAME;
+
+    if (targetDbName === 'test') {
+      return {
+        connected: true,
+        legacyCount: 0,
+        migratedCount: 0,
+        targetCountBefore: 0,
+        targetCountAfter: 0,
+        preservedIds: true
+      };
+    }
+
+    const testDb = client.db('test');
+    const targetDb = client.db(targetDbName);
+
+    const legacyCol = testDb.collection('teammembers');
+    const targetCol = targetDb.collection('teammembers');
+
+    const legacyDocs = await legacyCol.find({}).toArray();
+    const legacyCount = legacyDocs.length;
+    const targetCountBefore = await targetCol.countDocuments({});
+
+    let migratedCount = 0;
+
+    if (legacyCount > 0) {
+      for (const doc of legacyDocs) {
+        const existingByObjectId = await targetCol.findOne({ _id: doc._id });
+        const existingByCustomId = doc.id ? await targetCol.findOne({ id: doc.id }) : null;
+        const existingByEmail = doc.email
+          ? await targetCol.findOne({ email: doc.email })
+          : null;
+
+        if (!existingByObjectId && !existingByCustomId && !existingByEmail) {
+          await targetCol.insertOne({ ...doc });
+          migratedCount++;
+        }
+      }
+    }
+
+    const targetCountAfter = await targetCol.countDocuments({});
+    if (legacyCount > 0) {
+      console.log(
+        `[db] Verified legacy test.teammembers (${legacyCount} docs) -> ${targetDbName}.teammembers (migrated: ${migratedCount}, before: ${targetCountBefore}, after: ${targetCountAfter})`
+      );
+    }
+
+    return {
+      connected: true,
+      legacyCount,
+      migratedCount,
+      targetCountBefore,
+      targetCountAfter,
+      preservedIds: true
+    };
+  } catch (err) {
+    console.warn('[db] Legacy test.teammembers migration check error:', err.message);
+    return {
+      connected: true,
+      legacyCount: 0,
+      migratedCount: 0,
+      targetCountBefore: 0,
+      targetCountAfter: 0,
+      preservedIds: true,
+      error: err.message
+    };
+  }
+}
+
 export async function connectDB() {
   if (isConnected || mongoose.connection.readyState === 1) {
     return mongoose.connection;
   }
 
   const uri = process.env.MONGODB_URI;
+  const dbName = (process.env.MONGODB_DB_NAME || DEFAULT_MONGODB_DB_NAME).trim() || DEFAULT_MONGODB_DB_NAME;
+
   if (!uri) {
     if (!defaultsEnsured) {
       defaultsEnsured = true;
@@ -668,11 +755,13 @@ export async function connectDB() {
 
   try {
     const conn = await mongoose.connect(uri, {
+      dbName,
       serverSelectionTimeoutMS: 3000
     });
     isConnected = true;
     defaultsEnsured = true;
     console.log(`[db] MongoDB connected successfully to database: ${mongoose.connection.name}`);
+    await migrateLegacyTestTeamMembersIfNeeded();
     await purgeLegacyFakeDataAndEnsureDefaults();
     return conn;
   } catch (error) {

@@ -2951,6 +2951,7 @@ async function startServer() {
     'WHATSAPP_BUSINESS_ACCOUNT_ID',
     'WHATSAPP_API_VERSION',
     'MONGODB_URI',
+    'MONGODB_DB_NAME',
     'JWT_SECRET',
     'GEMINI_API_KEY',
     'GEMINI_MODEL'
