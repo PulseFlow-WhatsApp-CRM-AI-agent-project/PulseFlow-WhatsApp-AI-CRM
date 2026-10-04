@@ -11,7 +11,25 @@ const CRMContext = createContext(undefined);
 export const CRMProvider = ({ children }) => {
   const [isLoading, setIsLoading] = useState(true);
   const [teamMembers, setTeamMembers] = useState(INITIAL_TEAM_MEMBERS);
-  const [currentUser, setCurrentUser] = useState(INITIAL_TEAM_MEMBERS[0]);
+  const [authToken, setAuthToken] = useState(() => {
+    try {
+      return localStorage.getItem('pulseflow_auth_token') || '';
+    } catch {
+      return '';
+    }
+  });
+  const [currentUser, setCurrentUser] = useState(() => {
+    try {
+      const saved = localStorage.getItem('pulseflow_auth_user');
+      if (saved) {
+        const parsed = JSON.parse(saved);
+        if (parsed && parsed.id) return parsed;
+      }
+    } catch {
+      // ignore localStorage read errors
+    }
+    return INITIAL_TEAM_MEMBERS[0];
+  });
   const [isAuthenticated, setIsAuthenticated] = useState(true);
 
   const [contacts, setContacts] = useState([]);
@@ -57,8 +75,16 @@ export const CRMProvider = ({ children }) => {
       if (Array.isArray(data.teamMembers) && data.teamMembers.length > 0) {
         setTeamMembers(data.teamMembers);
         setCurrentUser((prev) => {
-          const found = data.teamMembers.find((m) => m.id === prev?.id);
-          return found || data.teamMembers[0];
+          const found = data.teamMembers.find(
+            (m) => m.id === prev?.id || (prev?.email && m.email?.toLowerCase() === prev.email.toLowerCase())
+          );
+          const nextUser = found || data.teamMembers[0];
+          try {
+            localStorage.setItem('pulseflow_auth_user', JSON.stringify(nextUser));
+          } catch {
+            // ignore
+          }
+          return nextUser;
         });
       }
       if (Array.isArray(data.contacts)) {
@@ -290,67 +316,258 @@ export const CRMProvider = ({ children }) => {
     return () => clearInterval(hotInterval);
   }, [fetchHotLeadAlerts]);
 
+  const loginWithEmailPassword = async (email, password) => {
+    try {
+      const res = await fetch('/api/auth/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password })
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.user) {
+        return {
+          ok: false,
+          error: data?.error || 'Invalid work email or password.'
+        };
+      }
+      setCurrentUser(data.user);
+      setIsAuthenticated(true);
+      if (data.token) {
+        setAuthToken(data.token);
+        try {
+          localStorage.setItem('pulseflow_auth_token', data.token);
+          localStorage.setItem('pulseflow_auth_user', JSON.stringify(data.user));
+        } catch {
+          // ignore
+        }
+      }
+      setTeamMembers((prev) => {
+        const exists = prev.some((m) => m.id === data.user.id);
+        return exists
+          ? prev.map((m) => (m.id === data.user.id ? data.user : m))
+          : [...prev, data.user];
+      });
+      pushToast(
+        `Signed in as ${data.user.name}`,
+        `Authenticated (${data.user.role})`,
+        'success'
+      );
+      return { ok: true, user: data.user };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err.message || 'Unable to reach authentication server.'
+      };
+    }
+  };
+
+  const registerUser = async ({ name, email, phone, password, role }) => {
+    try {
+      const res = await fetch('/api/auth/register', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ name, email, phone, password, role })
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.user) {
+        return {
+          success: false,
+          ok: false,
+          error: data?.error || 'Registration failed.'
+        };
+      }
+      setCurrentUser(data.user);
+      setIsAuthenticated(true);
+      if (data.token) {
+        setAuthToken(data.token);
+        try {
+          localStorage.setItem('pulseflow_auth_token', data.token);
+          localStorage.setItem('pulseflow_auth_user', JSON.stringify(data.user));
+        } catch {
+          // ignore
+        }
+      }
+      setTeamMembers((prev) => [...prev, data.user]);
+      pushToast(
+        `Account Created for ${data.user.name}`,
+        `Signed in as ${data.user.role}`,
+        'success'
+      );
+      return { success: true, ok: true, user: data.user };
+    } catch (err) {
+      return {
+        success: false,
+        ok: false,
+        error: err.message || 'Registration failed.'
+      };
+    }
+  };
+
+  const changePassword = async ({ userId, email, currentPassword, newPassword, adminOverride }) => {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch('/api/auth/change-password', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          userId: userId || currentUser?.id,
+          email,
+          currentPassword,
+          newPassword,
+          adminOverride: adminOverride || currentUser?.role === 'ADMIN'
+        })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        return {
+          ok: false,
+          error: data?.error || 'Failed to update password.'
+        };
+      }
+      pushToast('Password Updated', 'Password has been securely hashed and saved.', 'success');
+      return { ok: true };
+    } catch (err) {
+      return {
+        ok: false,
+        error: err.message || 'Failed to update password.'
+      };
+    }
+  };
+
   const loginAsRole = (role, email) => {
+    const normalizedRole =
+      String(role || '').toUpperCase().includes('ADMIN')
+        ? 'ADMIN'
+        : String(role || '').toUpperCase().includes('MANAGER')
+        ? 'MANAGER'
+        : String(role || '').toUpperCase().includes('AGENT')
+        ? 'AGENT'
+        : 'ADMIN';
     const matched =
       teamMembers.find((m) =>
-        email ? m.email.toLowerCase() === email.toLowerCase() : m.role === role
+        email ? m.email.toLowerCase() === email.toLowerCase() : m.role === normalizedRole
       ) ||
-      teamMembers.find((m) => m.role === role) ||
+      teamMembers.find((m) => m.role === normalizedRole) ||
       teamMembers[0];
     setCurrentUser(matched);
     setIsAuthenticated(true);
+    try {
+      localStorage.setItem('pulseflow_auth_user', JSON.stringify(matched));
+    } catch {
+      // ignore
+    }
     pushToast(`Signed in as ${matched.name}`, `Active Role: ${matched.role}`, 'success');
   };
 
   const logout = () => {
     setIsAuthenticated(false);
+    setAuthToken('');
+    try {
+      localStorage.removeItem('pulseflow_auth_token');
+    } catch {
+      // ignore
+    }
     pushToast('Signed out', 'Your session has been closed.');
   };
 
   const switchRole = (role) => {
-    const matched = teamMembers.find((m) => m.role === role) || teamMembers[0];
-    setCurrentUser({ ...matched, role });
+    const matched = teamMembers.find((m) => m.role === role) || currentUser || teamMembers[0];
+    const nextUser = { ...matched, role };
+    setCurrentUser(nextUser);
+    try {
+      localStorage.setItem('pulseflow_auth_user', JSON.stringify(nextUser));
+    } catch {
+      // ignore
+    }
     pushToast(
       `Switched Active Role to ${role}`,
-      `Now viewing CRM as ${matched.name} (${role})`
+      `Now viewing CRM as ${nextUser.name} (${role})`
     );
   };
 
   // Team CRUD (Persisted to MongoDB)
-  const addTeamMember = (member) => {
-    const newMember = {
-      ...member,
-      id: `usr-${Date.now()}`,
-      assignedLeadsCount: 0,
-      activeChatsCount: 0,
-      lastLoginAt: 'Never',
-      conversionRate: 0,
-      avgResponseTime: '—'
-    };
-    setTeamMembers((prev) => [...prev, newMember]);
-    fetch('/api/team', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(newMember)
-    }).catch((err) => console.error('Failed to save team member:', err));
-    pushToast('Team Member Added', `${member.name} (${member.role}) saved to database.`, 'success');
-    return newMember;
+  const addTeamMember = async (member) => {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch('/api/team', {
+        method: 'POST',
+        headers,
+        body: JSON.stringify(member)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('Could Not Add Member', data?.error || 'Failed to create team member.', 'danger');
+        return { ok: false, error: data?.error || 'Failed to create team member.' };
+      }
+      setTeamMembers((prev) => [...prev, data]);
+      pushToast(
+        'Team Member Added',
+        `${data.name} (${data.role}) account created with email + password login.`,
+        'success'
+      );
+      return { ok: true, member: data };
+    } catch (err) {
+      pushToast('Error', err.message || 'Failed to save team member.', 'danger');
+      return { ok: false, error: err.message };
+    }
   };
 
-  const updateTeamMember = (id, patch) => {
-    setTeamMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...patch } : m)));
+  const updateTeamMember = async (id, patch) => {
+    const { newPassword, password, ...visiblePatch } = patch;
+    setTeamMembers((prev) => prev.map((m) => (m.id === id ? { ...m, ...visiblePatch } : m)));
     if (currentUser?.id === id) {
-      setCurrentUser((prev) => ({ ...prev, ...patch }));
+      setCurrentUser((prev) => {
+        const updatedSelf = { ...prev, ...visiblePatch };
+        try {
+          localStorage.setItem('pulseflow_auth_user', JSON.stringify(updatedSelf));
+        } catch {
+          // ignore
+        }
+        return updatedSelf;
+      });
     }
-    fetch(`/api/team/${id}`, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(patch)
-    }).catch((err) => console.error('Failed to update team member:', err));
-    pushToast('User Profile Updated', 'Changes saved to database.', 'success');
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch(`/api/team/${id}`, {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify(patch)
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        pushToast('Update Failed', data?.error || 'Failed to update team member.', 'danger');
+        return { ok: false, error: data?.error || 'Failed to update team member.' };
+      }
+      if (data?.id) {
+        setTeamMembers((prev) => prev.map((m) => (m.id === id ? data : m)));
+        if (currentUser?.id === id) {
+          setCurrentUser((prev) => {
+            const nextSelf = { ...prev, ...data };
+            try {
+              localStorage.setItem('pulseflow_auth_user', JSON.stringify(nextSelf));
+            } catch {
+              // ignore
+            }
+            return nextSelf;
+          });
+        }
+      }
+      pushToast('User Profile Updated', 'Changes immediately applied across the CRM.', 'success');
+      return { ok: true, member: data };
+    } catch (err) {
+      console.error('Failed to update team member:', err);
+      return { ok: false, error: err.message };
+    }
   };
 
   const deleteTeamMember = (id) => {
+    if (id === currentUser?.id && teamMembers.length <= 1) {
+      pushToast('Action Blocked', 'You cannot delete the only remaining team member.', 'warning');
+      return;
+    }
     setTeamMembers((prev) => prev.filter((m) => m.id !== id));
     fetch(`/api/team/${id}`, { method: 'DELETE' }).catch((err) =>
       console.error('Failed to delete team member:', err)
@@ -1032,6 +1249,10 @@ export const CRMProvider = ({ children }) => {
         refreshCRMData: fetchCRMData,
         currentUser,
         isAuthenticated,
+        authToken,
+        loginWithEmailPassword,
+        registerUser,
+        changePassword,
         loginAsRole,
         logout,
         switchRole,

@@ -1,4 +1,5 @@
 import mongoose from 'mongoose';
+import crypto from 'node:crypto';
 import {
   INITIAL_TEAM_MEMBERS,
   INITIAL_CONTACTS,
@@ -34,6 +35,8 @@ const TeamMemberSchema = new mongoose.Schema(
     email: { type: String, required: true },
     role: { type: String, enum: ['ADMIN', 'MANAGER', 'AGENT'], default: 'AGENT' },
     phone: { type: String, default: '' },
+    passwordHash: { type: String, default: '' },
+    passwordSalt: { type: String, default: '' },
     isActive: { type: Boolean, default: true },
     assignedLeadsCount: { type: Number, default: 0 },
     activeChatsCount: { type: Number, default: 0 },
@@ -43,6 +46,24 @@ const TeamMemberSchema = new mongoose.Schema(
   },
   { timestamps: false }
 );
+
+export function hashPassword(password, existingSalt = '') {
+  const salt = existingSalt || crypto.randomBytes(16).toString('hex');
+  const hash = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return { passwordHash: hash, passwordSalt: salt };
+}
+
+export function verifyPassword(password, storedHash, storedSalt) {
+  if (!password || !storedHash || !storedSalt) return false;
+  try {
+    const computed = crypto.scryptSync(String(password), storedSalt, 64);
+    const expected = Buffer.from(storedHash, 'hex');
+    if (computed.length !== expected.length) return false;
+    return crypto.timingSafeEqual(computed, expected);
+  } catch {
+    return false;
+  }
+}
 
 const ContactSchema = new mongoose.Schema(
   {
@@ -475,8 +496,14 @@ const initialWhatsAppSettings = {
 
 const initialMessagesList = Object.values(INITIAL_MESSAGES).flat();
 
+const seededTeamMembers = INITIAL_TEAM_MEMBERS.map((tm) => {
+  if (tm.passwordHash && tm.passwordSalt) return tm;
+  const { passwordHash, passwordSalt } = hashPassword(tm.defaultPassword || 'PulseFlow@123');
+  return { ...tm, passwordHash, passwordSalt };
+});
+
 const inMemoryStores = {
-  TeamMember: new InMemoryCollection(INITIAL_TEAM_MEMBERS),
+  TeamMember: new InMemoryCollection(seededTeamMembers),
   Contact: new InMemoryCollection(INITIAL_CONTACTS),
   Lead: new InMemoryCollection(INITIAL_LEADS),
   Conversation: new InMemoryCollection(INITIAL_CONVERSATIONS),
@@ -527,7 +554,18 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
   try {
     const teamCount = await TeamMember.countDocuments();
     if (teamCount === 0) {
-      await TeamMember.insertMany(INITIAL_TEAM_MEMBERS);
+      await TeamMember.insertMany(seededTeamMembers);
+    } else {
+      const existingMembers = await TeamMember.find({});
+      for (const tm of existingMembers) {
+        if (!tm.passwordHash || !tm.passwordSalt) {
+          const { passwordHash, passwordSalt } = hashPassword('PulseFlow@123');
+          await TeamMember.findOneAndUpdate(
+            { id: tm.id },
+            { $set: { passwordHash, passwordSalt } }
+          );
+        }
+      }
     }
 
     const existingWa = await Setting.findOne({ type: 'whatsappSettings' });

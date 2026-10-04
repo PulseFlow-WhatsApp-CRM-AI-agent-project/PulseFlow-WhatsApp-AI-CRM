@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   Plus,
   Trash2,
@@ -6,7 +6,16 @@ import {
   Check,
   Save,
   X,
-  ShieldCheck
+  ShieldCheck,
+  Edit3,
+  KeyRound,
+  Eye,
+  EyeOff,
+  UserCheck,
+  Lock,
+  Mail,
+  Phone,
+  User
 } from 'lucide-react';
 import { useCRM } from '../context/CRMContext';
 import {
@@ -18,34 +27,179 @@ import {
 
 /* 1. TEAM MEMBERS PAGE */
 export const TeamMembersPage = () => {
-  const { teamMembers, currentUser, addTeamMember, updateTeamMember, deleteTeamMember } = useCRM();
-  const [showModal, setShowModal] = useState(false);
+  const {
+    teamMembers = [],
+    leads = [],
+    conversations = [],
+    currentUser,
+    addTeamMember,
+    updateTeamMember,
+    deleteTeamMember,
+    changePassword
+  } = useCRM();
+
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  // Add Member Modal State
+  const [showAddModal, setShowAddModal] = useState(false);
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
-  const [phone, setPhone] = useState('+91 98470 ');
+  const [phone, setPhone] = useState('+91 ');
   const [role, setRole] = useState('AGENT');
+  const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [addError, setAddError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  const handleAdd = (e) => {
-    e.preventDefault();
-    addTeamMember({ name, email, phone, role, isActive: true });
-    setShowModal(false);
+  // Edit Member Modal State
+  const [editingMember, setEditingMember] = useState(null);
+  const [editForm, setEditForm] = useState({
+    name: '',
+    email: '',
+    phone: '',
+    role: 'AGENT',
+    isActive: true,
+    newPassword: ''
+  });
+  const [showEditPassword, setShowEditPassword] = useState(false);
+  const [editError, setEditError] = useState('');
+
+  // Quick Password Reset Modal State
+  const [resetTarget, setResetTarget] = useState(null);
+  const [resetNewPassword, setResetNewPassword] = useState('');
+  const [resetConfirmPassword, setResetConfirmPassword] = useState('');
+  const [resetError, setResetError] = useState('');
+
+  const handleOpenAdd = () => {
     setName('');
     setEmail('');
+    setPhone('+91 ');
+    setRole('AGENT');
+    setPassword('');
+    setAddError('');
+    setShowAddModal(true);
+  };
+
+  const handleAdd = async (e) => {
+    e.preventDefault();
+    setAddError('');
+    if (!name.trim() || !email.trim() || !password) {
+      setAddError('Full Name, Work Email, and Password are required.');
+      return;
+    }
+    if (password.length < 6) {
+      setAddError('Password must be at least 6 characters.');
+      return;
+    }
+    setIsSubmitting(true);
+    const result = await addTeamMember({
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim(),
+      role,
+      password,
+      isActive: true
+    });
+    setIsSubmitting(false);
+    if (!result?.ok) {
+      setAddError(result?.error || 'Could not create team member.');
+      return;
+    }
+    setShowAddModal(false);
+  };
+
+  const handleOpenEdit = (tm) => {
+    setEditingMember(tm);
+    setEditForm({
+      name: tm.name || '',
+      email: tm.email || '',
+      phone: tm.phone || '',
+      role: tm.role || 'AGENT',
+      isActive: tm.isActive !== false,
+      newPassword: ''
+    });
+    setEditError('');
+    setShowEditPassword(false);
+  };
+
+  const handleSaveEdit = async (e) => {
+    e.preventDefault();
+    if (!editingMember) return;
+    setEditError('');
+    if (!editForm.name.trim() || !editForm.email.trim()) {
+      setEditError('Full Name and Work Email are required.');
+      return;
+    }
+    if (editForm.newPassword && editForm.newPassword.length < 6) {
+      setEditError('New password must be at least 6 characters.');
+      return;
+    }
+
+    const patch = {
+      name: editForm.name.trim(),
+      email: editForm.email.trim().toLowerCase(),
+      phone: editForm.phone.trim(),
+      role: isAdmin ? editForm.role : editingMember.role,
+      isActive: isAdmin ? editForm.isActive : editingMember.isActive
+    };
+    if (editForm.newPassword.trim()) {
+      patch.newPassword = editForm.newPassword.trim();
+    }
+
+    const res = await updateTeamMember(editingMember.id, patch);
+    if (res?.ok === false) {
+      setEditError(res.error || 'Failed to update member.');
+      return;
+    }
+    setEditingMember(null);
+  };
+
+  const handleOpenResetPassword = (tm) => {
+    setResetTarget(tm);
+    setResetNewPassword('');
+    setResetConfirmPassword('');
+    setResetError('');
+  };
+
+  const handleConfirmResetPassword = async (e) => {
+    e.preventDefault();
+    if (!resetTarget) return;
+    setResetError('');
+    if (!resetNewPassword || resetNewPassword.length < 6) {
+      setResetError('Password must be at least 6 characters.');
+      return;
+    }
+    if (resetNewPassword !== resetConfirmPassword) {
+      setResetError('Passwords do not match.');
+      return;
+    }
+    const res = await changePassword({
+      userId: resetTarget.id,
+      newPassword: resetNewPassword,
+      adminOverride: true
+    });
+    if (!res?.ok) {
+      setResetError(res?.error || 'Failed to reset password.');
+      return;
+    }
+    setResetTarget(null);
   };
 
   return (
     <div className="p-4 lg:p-6 max-w-[1440px] mx-auto space-y-6">
       <div className="glass-panel rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-600">Role-Based Access Control (ADMIN, MANAGER, AGENT)</div>
+          <div className="text-xs text-slate-600">
+            Role-Based Access Control (ADMIN, MANAGER, AGENT) · Email + Password Authentication
+          </div>
           <h1 className="text-xl font-bold text-slate-900 mt-0.5">
             Team Members ({teamMembers.length})
           </h1>
         </div>
-        {currentUser.role === 'ADMIN' && (
+        {isAdmin && (
           <button
-            onClick={() => setShowModal(true)}
-            className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold rounded-xl hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 flex items-center gap-1.5 self-start transition-all"
+            onClick={handleOpenAdd}
+            className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold rounded-xl hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 flex items-center gap-1.5 self-start transition-all cursor-pointer"
           >
             <Plus className="w-3.5 h-3.5" />
             <span>Add Team Member</span>
@@ -57,123 +211,210 @@ export const TeamMembersPage = () => {
         <table className="w-full text-left border-collapse text-xs">
           <thead>
             <tr className="border-b border-white/60 text-slate-500">
-              <th className="py-3 px-4 font-semibold">Name & Email</th>
-              <th className="py-3 px-4 font-semibold">Phone</th>
+              <th className="py-3 px-4 font-semibold">Team Member & Login Email</th>
+              <th className="py-3 px-4 font-semibold">Phone Number</th>
               <th className="py-3 px-4 font-semibold">Role</th>
               <th className="py-3 px-4 font-semibold text-right">Assigned Leads</th>
+              <th className="py-3 px-4 font-semibold">Last Login</th>
               <th className="py-3 px-4 font-semibold">Status</th>
               <th className="py-3 px-4 font-semibold text-right">Actions</th>
             </tr>
           </thead>
           <tbody className="divide-y divide-white/50">
-            {teamMembers.map((tm) => (
-              <tr key={tm.id} className="hover:bg-white/45 transition-colors">
-                <td className="py-3.5 px-4">
-                  <div className="font-bold text-slate-900">{tm.name}</div>
-                  <div className="text-[11px] text-slate-600">{tm.email}</div>
-                </td>
-                <td className="py-3.5 px-4 font-mono text-slate-700 tabular-nums">{tm.phone}</td>
-                <td className="py-3.5 px-4">
-                  {currentUser.role === 'ADMIN' ? (
-                    <select
-                      value={tm.role}
-                      onChange={(e) =>
-                        updateTeamMember(tm.id, { role: e.target.value })
-                      }
-                      className="px-2.5 py-1.5 border border-white/80 rounded-xl bg-white/75 font-mono text-xs"
+            {teamMembers.map((tm) => {
+              const liveAssignedLeads = leads.filter((l) => l.assignedAgentId === tm.id).length;
+              const liveActiveChats = conversations.filter((c) => c.assignedAgentId === tm.id).length;
+              const isSelf = currentUser?.id === tm.id;
+              const canEdit = isAdmin || isSelf;
+              const initials = (tm.name || 'TM')
+                .split(' ')
+                .map((p) => p[0])
+                .join('')
+                .slice(0, 2)
+                .toUpperCase();
+
+              return (
+                <tr key={tm.id} className="hover:bg-white/45 transition-colors">
+                  <td className="py-3.5 px-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-9 h-9 rounded-xl bg-slate-900 text-white font-bold text-xs flex items-center justify-center shrink-0">
+                        {initials}
+                      </div>
+                      <div>
+                        <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                          <span>{tm.name}</span>
+                          {isSelf && (
+                            <span className="px-2 py-0.5 rounded-full text-[10px] font-mono bg-indigo-500/15 text-indigo-800 border border-indigo-300">
+                              You
+                            </span>
+                          )}
+                        </div>
+                        <div className="text-[11px] text-slate-600 font-mono">{tm.email}</div>
+                      </div>
+                    </div>
+                  </td>
+                  <td className="py-3.5 px-4 font-mono text-slate-700 tabular-nums">
+                    {tm.phone || '—'}
+                  </td>
+                  <td className="py-3.5 px-4">
+                    {isAdmin ? (
+                      <select
+                        value={tm.role}
+                        onChange={(e) => updateTeamMember(tm.id, { role: e.target.value })}
+                        className="px-2.5 py-1.5 border border-white/80 rounded-xl bg-white/75 font-mono text-xs font-semibold cursor-pointer"
+                      >
+                        <option value="ADMIN">ADMIN</option>
+                        <option value="MANAGER">MANAGER</option>
+                        <option value="AGENT">AGENT</option>
+                      </select>
+                    ) : (
+                      <span className="px-2.5 py-1 rounded-lg bg-white/70 border border-white font-mono font-semibold">
+                        {tm.role}
+                      </span>
+                    )}
+                  </td>
+                  <td className="py-3.5 px-4 text-right font-mono tabular-nums">
+                    <span className="font-bold text-slate-900">
+                      {liveAssignedLeads || tm.assignedLeadsCount || 0}
+                    </span>
+                    <span className="text-[10px] text-slate-500 block">
+                      {liveActiveChats} active {liveActiveChats === 1 ? 'chat' : 'chats'}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 text-slate-600 font-mono text-[11px]">
+                    {tm.lastLoginAt || 'Never'}
+                  </td>
+                  <td className="py-3.5 px-4">
+                    <span
+                      className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
+                        tm.isActive !== false
+                          ? 'bg-emerald-500/15 text-emerald-800 border border-emerald-300'
+                          : 'bg-slate-200/70 text-slate-600 border border-slate-300'
+                      }`}
                     >
-                      <option value="ADMIN">ADMIN</option>
-                      <option value="MANAGER">MANAGER</option>
-                      <option value="AGENT">AGENT</option>
-                    </select>
-                  ) : (
-                    <span className="font-mono font-semibold">{tm.role}</span>
-                  )}
-                </td>
-                <td className="py-3.5 px-4 text-right font-mono tabular-nums font-bold">
-                  {tm.assignedLeadsCount}
-                </td>
-                <td className="py-3.5 px-4">
-                  <span
-                    className={`px-2.5 py-0.5 rounded-full text-[10px] font-bold ${
-                      tm.isActive
-                        ? 'bg-emerald-500/15 text-emerald-800 border border-emerald-300'
-                        : 'bg-slate-200/70 text-slate-600'
-                    }`}
-                  >
-                    {tm.isActive ? 'Active' : 'Suspended'}
-                  </span>
-                </td>
-                <td className="py-3.5 px-4 text-right whitespace-nowrap space-x-2">
-                  {currentUser.role === 'ADMIN' && (
-                    <>
+                      {tm.isActive !== false ? 'Active' : 'Deactivated'}
+                    </span>
+                  </td>
+                  <td className="py-3.5 px-4 text-right whitespace-nowrap space-x-1.5">
+                    {canEdit && (
                       <button
-                        onClick={() => updateTeamMember(tm.id, { isActive: !tm.isActive })}
-                        className="px-3 py-1.5 border border-white/80 bg-white/75 rounded-xl hover:bg-white text-slate-700 font-semibold transition-colors"
+                        type="button"
+                        onClick={() => handleOpenEdit(tm)}
+                        className="px-2.5 py-1.5 border border-white/80 bg-white/75 rounded-xl hover:bg-white text-slate-800 font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                        title="Edit Name, Phone, Email, Role, or Password"
                       >
-                        {tm.isActive ? 'Deactivate' : 'Activate'}
+                        <Edit3 className="w-3.5 h-3.5 text-slate-600" />
+                        <span>Edit</span>
                       </button>
-                      <button
-                        onClick={() => deleteTeamMember(tm.id)}
-                        className="p-1.5 text-slate-500 hover:text-rose-600 rounded-xl hover:bg-white/60"
-                      >
-                        <Trash2 className="w-3.5 h-3.5 inline" />
-                      </button>
-                    </>
-                  )}
-                </td>
-              </tr>
-            ))}
+                    )}
+                    {isAdmin && (
+                      <>
+                        <button
+                          type="button"
+                          onClick={() => handleOpenResetPassword(tm)}
+                          className="px-2.5 py-1.5 border border-white/80 bg-white/75 rounded-xl hover:bg-white text-indigo-700 font-semibold inline-flex items-center gap-1 transition-colors cursor-pointer"
+                          title="Reset / Change Password"
+                        >
+                          <KeyRound className="w-3.5 h-3.5" />
+                          <span>Password</span>
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() =>
+                            updateTeamMember(tm.id, { isActive: tm.isActive === false })
+                          }
+                          className="px-2.5 py-1.5 border border-white/80 bg-white/75 rounded-xl hover:bg-white text-slate-700 font-semibold transition-colors cursor-pointer"
+                        >
+                          {tm.isActive !== false ? 'Deactivate' : 'Activate'}
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => deleteTeamMember(tm.id)}
+                          className="p-1.5 text-slate-500 hover:text-rose-600 rounded-xl hover:bg-white/60 cursor-pointer"
+                          title="Delete Team Member"
+                        >
+                          <Trash2 className="w-3.5 h-3.5 inline" />
+                        </button>
+                      </>
+                    )}
+                  </td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       </div>
 
-      {showModal && (
+      {/* ADD TEAM MEMBER MODAL */}
+      {showAddModal && (
         <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
           <div className="glass-panel-strong border border-white/80 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
             <div className="flex items-center justify-between pb-3 border-b border-white/60">
-              <h3 className="text-sm font-bold text-slate-900">Invite Team Member</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-700">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">Create Team Member Account</h3>
+                <p className="text-[11px] text-slate-500">
+                  Member will sign in using their Work Email and Password
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleAdd} className="space-y-3 text-xs">
+
+            <form onSubmit={handleAdd} className="space-y-3.5 text-xs">
+              {addError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-rose-800 font-semibold">
+                  {addError}
+                </div>
+              )}
+
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
+                <label className="block font-semibold text-slate-700 mb-1">Full Name *</label>
                 <input
                   type="text"
                   required
+                  placeholder="e.g., Rahul Nair"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
+
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Work Email</label>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Work Email (Used for Login) *
+                </label>
                 <input
                   type="email"
                   required
+                  placeholder="rahul@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Phone</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
                   <input
                     type="text"
+                    placeholder="+91 98470 00000"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
                     className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl font-mono focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Role</label>
+                  <label className="block font-semibold text-slate-700 mb-1">Role *</label>
                   <select
                     value={role}
                     onChange={(e) => setRole(e.target.value)}
-                    className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                    className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl font-semibold focus:outline-none focus:border-emerald-500"
                   >
                     <option value="ADMIN">ADMIN</option>
                     <option value="MANAGER">MANAGER</option>
@@ -181,19 +422,264 @@ export const TeamMembersPage = () => {
                   </select>
                 </div>
               </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Login Password *
+                </label>
+                <div className="relative">
+                  <input
+                    type={showPassword ? 'text' : 'password'}
+                    required
+                    minLength={6}
+                    placeholder="Minimum 6 characters"
+                    value={password}
+                    onChange={(e) => setPassword(e.target.value)}
+                    className="w-full pl-3.5 pr-9 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                  </button>
+                </div>
+                <p className="text-[10px] text-slate-500 mt-1">
+                  Hashed securely on the backend before saving. Phone number is for contact reference only.
+                </p>
+              </div>
+
               <div className="pt-2 flex justify-end gap-2">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-white/80 bg-white/60 rounded-xl font-semibold text-slate-600 hover:bg-white"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 border border-white/80 bg-white/60 rounded-xl font-semibold text-slate-600 hover:bg-white cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-500 shadow-sm"
+                  disabled={isSubmitting}
+                  className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-500 shadow-sm cursor-pointer"
                 >
-                  Provision Account
+                  {isSubmitting ? 'Creating Account...' : 'Create Member Account'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* EDIT TEAM MEMBER MODAL */}
+      {editingMember && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="glass-panel-strong border border-white/80 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-white/60">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Edit Team Member · {editingMember.name}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Changes immediately update across Header, Handled By, and Assigned Leads
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditingMember(null)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleSaveEdit} className="space-y-3.5 text-xs">
+              {editError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-rose-800 font-semibold">
+                  {editError}
+                </div>
+              )}
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">Full Name *</label>
+                <input
+                  type="text"
+                  required
+                  value={editForm.name}
+                  onChange={(e) => setEditForm({ ...editForm, name: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Work Email (Login Credential) *
+                </label>
+                <input
+                  type="email"
+                  required
+                  value={editForm.email}
+                  onChange={(e) => setEditForm({ ...editForm, email: e.target.value })}
+                  className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
+                  <input
+                    type="text"
+                    value={editForm.phone}
+                    onChange={(e) => setEditForm({ ...editForm, phone: e.target.value })}
+                    className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl font-mono focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 mb-1">Role</label>
+                  <select
+                    value={editForm.role}
+                    disabled={!isAdmin}
+                    onChange={(e) => setEditForm({ ...editForm, role: e.target.value })}
+                    className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl font-semibold focus:outline-none focus:border-emerald-500 disabled:opacity-60"
+                  >
+                    <option value="ADMIN">ADMIN</option>
+                    <option value="MANAGER">MANAGER</option>
+                    <option value="AGENT">AGENT</option>
+                  </select>
+                </div>
+              </div>
+
+              {isAdmin && (
+                <div className="flex items-center justify-between py-2 px-3 rounded-xl bg-white/60 border border-white/80">
+                  <div>
+                    <div className="font-semibold text-slate-800">Account Active Status</div>
+                    <div className="text-[10px] text-slate-500">
+                      Deactivated members cannot sign in
+                    </div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={editForm.isActive}
+                    onChange={(e) => setEditForm({ ...editForm, isActive: e.target.checked })}
+                    className="w-4 h-4 accent-emerald-600"
+                  />
+                </div>
+              )}
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Set New Password (Optional)
+                </label>
+                <div className="relative">
+                  <input
+                    type={showEditPassword ? 'text' : 'password'}
+                    placeholder="Leave blank to keep current password"
+                    value={editForm.newPassword}
+                    onChange={(e) => setEditForm({ ...editForm, newPassword: e.target.value })}
+                    className="w-full pl-3.5 pr-9 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowEditPassword((prev) => !prev)}
+                    className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                  >
+                    {showEditPassword ? (
+                      <EyeOff className="w-4 h-4" />
+                    ) : (
+                      <Eye className="w-4 h-4" />
+                    )}
+                  </button>
+                </div>
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setEditingMember(null)}
+                  className="px-4 py-2 border border-white/80 bg-white/60 rounded-xl font-semibold text-slate-600 hover:bg-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-emerald-600 text-white font-semibold rounded-xl hover:bg-emerald-500 shadow-sm cursor-pointer"
+                >
+                  Save Member Changes
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* PASSWORD RESET MODAL */}
+      {resetTarget && (
+        <div className="fixed inset-0 bg-slate-900/40 backdrop-blur-md z-50 flex items-center justify-center p-4">
+          <div className="glass-panel-strong border border-white/80 rounded-3xl max-w-md w-full p-6 space-y-4 shadow-2xl">
+            <div className="flex items-center justify-between pb-3 border-b border-white/60">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Reset Password · {resetTarget.name}
+                </h3>
+                <p className="text-[11px] text-slate-500">{resetTarget.email}</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setResetTarget(null)}
+                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+
+            <form onSubmit={handleConfirmResetPassword} className="space-y-3.5 text-xs">
+              {resetError && (
+                <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-rose-800 font-semibold">
+                  {resetError}
+                </div>
+              )}
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">New Password *</label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Min. 6 characters"
+                  value={resetNewPassword}
+                  onChange={(e) => setResetNewPassword(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 mb-1">
+                  Confirm New Password *
+                </label>
+                <input
+                  type="password"
+                  required
+                  minLength={6}
+                  placeholder="Re-enter new password"
+                  value={resetConfirmPassword}
+                  onChange={(e) => setResetConfirmPassword(e.target.value)}
+                  className="w-full px-3.5 py-2 bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="pt-2 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setResetTarget(null)}
+                  className="px-4 py-2 border border-white/80 bg-white/60 rounded-xl font-semibold text-slate-600 hover:bg-white cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 shadow-sm cursor-pointer"
+                >
+                  Update Password
                 </button>
               </div>
             </form>
@@ -1068,51 +1554,143 @@ export const CompanySettingsPage = () => {
 
 /* 6. PROFILE & GENERAL SETTINGS PAGE */
 export const ProfileSettingsPage = ({ mode }) => {
-  const { currentUser, updateTeamMember, pushToast } = useCRM();
-  const [name, setName] = useState(currentUser.name);
-  const [phone, setPhone] = useState(currentUser.phone);
+  const { currentUser, updateTeamMember, changePassword, pushToast } = useCRM();
+  const [name, setName] = useState(currentUser?.name || '');
+  const [email, setEmail] = useState(currentUser?.email || '');
+  const [phone, setPhone] = useState(currentUser?.phone || '');
+  const [profileError, setProfileError] = useState('');
+
+  // Password Change State
+  const [currentPassword, setCurrentPassword] = useState('');
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [passwordError, setPasswordError] = useState('');
+  const [passwordSuccess, setPasswordSuccess] = useState('');
+  const [changingPass, setChangingPass] = useState(false);
+
   const [hotLeadAlert, setHotLeadAlert] = useState(true);
   const [handoffAlert, setHandoffAlert] = useState(true);
   const [followUpAlert, setFollowUpAlert] = useState(true);
 
+  useEffect(() => {
+    if (currentUser) {
+      setName(currentUser.name || '');
+      setEmail(currentUser.email || '');
+      setPhone(currentUser.phone || '');
+    }
+  }, [currentUser?.id, currentUser?.name, currentUser?.email, currentUser?.phone]);
+
+  const handleSaveProfile = async (e) => {
+    e.preventDefault();
+    setProfileError('');
+    if (!name.trim() || !email.trim()) {
+      setProfileError('Full Name and Work Email are required.');
+      return;
+    }
+    const res = await updateTeamMember(currentUser.id, {
+      name: name.trim(),
+      email: email.trim().toLowerCase(),
+      phone: phone.trim()
+    });
+    if (res?.ok === false) {
+      setProfileError(res.error || 'Could not update profile.');
+    }
+  };
+
+  const handlePasswordChange = async (e) => {
+    e.preventDefault();
+    setPasswordError('');
+    setPasswordSuccess('');
+    if (!currentPassword) {
+      setPasswordError('Please enter your current password.');
+      return;
+    }
+    if (!newPassword || newPassword.length < 6) {
+      setPasswordError('New password must be at least 6 characters.');
+      return;
+    }
+    if (newPassword !== confirmPassword) {
+      setPasswordError('New password and confirmation do not match.');
+      return;
+    }
+    setChangingPass(true);
+    const res = await changePassword({
+      userId: currentUser.id,
+      currentPassword,
+      newPassword,
+      adminOverride: false
+    });
+    setChangingPass(false);
+    if (!res?.ok) {
+      setPasswordError(res?.error || 'Failed to change password.');
+      return;
+    }
+    setCurrentPassword('');
+    setNewPassword('');
+    setConfirmPassword('');
+    setPasswordSuccess('Your password has been securely updated.');
+  };
+
   return (
     <div className="p-4 lg:p-6 max-w-[1440px] mx-auto space-y-6">
-      <div className="glass-panel rounded-3xl p-5">
-        <div className="text-xs text-slate-600">Account & Workspace Preferences</div>
-        <h1 className="text-xl font-bold text-slate-900 mt-0.5">
-          {mode === 'profile' ? 'My User Profile' : 'General CRM Settings'}
-        </h1>
+      <div className="glass-panel rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <div className="text-xs text-slate-600">Account Profile, Security & Workspace Preferences</div>
+          <h1 className="text-xl font-bold text-slate-900 mt-0.5">
+            {mode === 'profile' ? 'Edit Profile & Security' : 'General CRM & Profile Settings'}
+          </h1>
+        </div>
+        <span className="px-3 py-1 rounded-full bg-emerald-500/15 border border-emerald-300 text-emerald-800 font-mono text-xs font-bold self-start sm:self-auto">
+          Signed in as {currentUser?.name} ({currentUser?.role})
+        </span>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs">
-        <div className="glass-panel rounded-3xl p-6 space-y-4">
-          <h2 className="text-sm font-bold text-slate-900">Personal Details & Role</h2>
+        {/* Personal Details Card */}
+        <form onSubmit={handleSaveProfile} className="glass-panel rounded-3xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-slate-900">Edit Personal Profile</h2>
+            <span className="text-[11px] text-slate-500">Syncs across all CRM modules</span>
+          </div>
+
+          {profileError && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-rose-800 font-semibold">
+              {profileError}
+            </div>
+          )}
+
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
+            <label className="block font-semibold text-slate-700 mb-1">Full Display Name *</label>
             <input
               type="text"
+              required
               value={name}
               onChange={(e) => setName(e.target.value)}
-              className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80"
+              className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 focus:outline-none focus:border-emerald-500"
             />
           </div>
+
           <div>
-            <label className="block font-semibold text-slate-700 mb-1">Email</label>
+            <label className="block font-semibold text-slate-700 mb-1">
+              Work Email (Login Credential) *
+            </label>
             <input
               type="email"
-              readOnly
-              value={currentUser.email}
-              className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/60 text-slate-600"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 focus:outline-none focus:border-emerald-500"
             />
           </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">Phone</label>
+              <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
               <input
                 type="text"
                 value={phone}
                 onChange={(e) => setPhone(e.target.value)}
-                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 font-mono"
+                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 font-mono focus:outline-none focus:border-emerald-500"
               />
             </div>
             <div>
@@ -1120,59 +1698,130 @@ export const ProfileSettingsPage = ({ mode }) => {
               <input
                 type="text"
                 readOnly
-                value={currentUser.role}
-                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/60 font-mono font-bold"
+                value={currentUser?.role || 'AGENT'}
+                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/60 font-mono font-bold text-slate-700"
               />
             </div>
           </div>
-          <button
-            type="button"
-            onClick={() => updateTeamMember(currentUser.id, { name, phone })}
-            className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-semibold rounded-xl hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 transition-all"
-          >
-            Update Profile
-          </button>
-        </div>
 
-        <div className="glass-panel rounded-3xl p-6 space-y-4">
-          <h2 className="text-sm font-bold text-slate-900">Real-Time Notification Preferences</h2>
-          <label className="flex items-center justify-between py-2 border-b border-white/50">
-            <span>Instant alert when AI qualifies a new HOT Lead (Score 81+)</span>
-            <input
-              type="checkbox"
-              checked={hotLeadAlert}
-              onChange={(e) => setHotLeadAlert(e.target.checked)}
-              className="w-4 h-4 accent-emerald-600"
-            />
-          </label>
-          <label className="flex items-center justify-between py-2 border-b border-white/50">
-            <span>High-priority alert when Human Handoff is triggered</span>
-            <input
-              type="checkbox"
-              checked={handoffAlert}
-              onChange={(e) => setHandoffAlert(e.target.checked)}
-              className="w-4 h-4 accent-emerald-600"
-            />
-          </label>
-          <label className="flex items-center justify-between py-2 border-b border-white/50">
-            <span>Daily reminder for pending and overdue Follow-ups</span>
-            <input
-              type="checkbox"
-              checked={followUpAlert}
-              onChange={(e) => setFollowUpAlert(e.target.checked)}
-              className="w-4 h-4 accent-emerald-600"
-            />
-          </label>
           <button
-            type="button"
-            onClick={() =>
-              pushToast('Preferences Saved', 'Notification triggers updated.', 'success')
-            }
-            className="px-4 py-2.5 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-all"
+            type="submit"
+            className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 text-white font-semibold rounded-xl hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 transition-all cursor-pointer"
           >
-            Save Notification Rules
+            Save Profile Changes
           </button>
-        </div>
+        </form>
+
+        {/* Change Password Card */}
+        <form onSubmit={handlePasswordChange} className="glass-panel rounded-3xl p-6 space-y-4">
+          <div className="flex items-center justify-between">
+            <h2 className="text-sm font-bold text-slate-900">Change Account Password</h2>
+            <span className="text-[11px] font-mono text-emerald-700 font-semibold">
+              Scrypt Hashed
+            </span>
+          </div>
+
+          {passwordError && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-rose-800 font-semibold">
+              {passwordError}
+            </div>
+          )}
+
+          {passwordSuccess && (
+            <div className="p-3 rounded-xl bg-emerald-500/15 border border-emerald-300 text-emerald-900 font-semibold">
+              {passwordSuccess}
+            </div>
+          )}
+
+          <div>
+            <label className="block font-semibold text-slate-700 mb-1">Current Password *</label>
+            <input
+              type="password"
+              required
+              placeholder="Enter current password"
+              value={currentPassword}
+              onChange={(e) => setCurrentPassword(e.target.value)}
+              className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 focus:outline-none focus:border-emerald-500"
+            />
+          </div>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">New Password *</label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                placeholder="Min. 6 characters"
+                value={newPassword}
+                onChange={(e) => setNewPassword(e.target.value)}
+                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+            <div>
+              <label className="block font-semibold text-slate-700 mb-1">
+                Confirm New Password *
+              </label>
+              <input
+                type="password"
+                required
+                minLength={6}
+                placeholder="Re-enter new password"
+                value={confirmPassword}
+                onChange={(e) => setConfirmPassword(e.target.value)}
+                className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 focus:outline-none focus:border-emerald-500"
+              />
+            </div>
+          </div>
+
+          <button
+            type="submit"
+            disabled={changingPass}
+            className="px-4 py-2.5 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-all cursor-pointer"
+          >
+            {changingPass ? 'Updating Password...' : 'Update Password'}
+          </button>
+        </form>
+      </div>
+
+      <div className="glass-panel rounded-3xl p-6 space-y-4 text-xs">
+        <h2 className="text-sm font-bold text-slate-900">Real-Time Notification Preferences</h2>
+        <label className="flex items-center justify-between py-2 border-b border-white/50">
+          <span>Instant alert when AI qualifies a new HOT Lead (Score 81+)</span>
+          <input
+            type="checkbox"
+            checked={hotLeadAlert}
+            onChange={(e) => setHotLeadAlert(e.target.checked)}
+            className="w-4 h-4 accent-emerald-600"
+          />
+        </label>
+        <label className="flex items-center justify-between py-2 border-b border-white/50">
+          <span>High-priority alert when Human Handoff is triggered</span>
+          <input
+            type="checkbox"
+            checked={handoffAlert}
+            onChange={(e) => setHandoffAlert(e.target.checked)}
+            className="w-4 h-4 accent-emerald-600"
+          />
+        </label>
+        <label className="flex items-center justify-between py-2 border-b border-white/50">
+          <span>Daily reminder for pending and overdue Follow-ups</span>
+          <input
+            type="checkbox"
+            checked={followUpAlert}
+            onChange={(e) => setFollowUpAlert(e.target.checked)}
+            className="w-4 h-4 accent-emerald-600"
+          />
+        </label>
+        <button
+          type="button"
+          onClick={() =>
+            pushToast('Preferences Saved', 'Notification triggers updated.', 'success')
+          }
+          className="px-4 py-2.5 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 transition-all cursor-pointer"
+        >
+          Save Notification Rules
+        </button>
       </div>
     </div>
   );

@@ -3,34 +3,36 @@ import { Link, useNavigate } from 'react-router-dom';
 import {
   MessageSquare,
   Sparkles,
-  Bot,
-  ShieldCheck,
   ArrowRight,
   Lock,
   Mail,
-  User,
-  Building2,
-  CheckCircle2,
+  Phone,
+  Eye,
+  EyeOff,
 } from 'lucide-react';
 import { useCRM } from '../context/CRMContext';
 import bgImage from '../public/bg.webp';
 
 export const LoginPage = () => {
   const navigate = useNavigate();
-  const { loginAsRole } = useCRM();
+  const { loginWithEmailPassword, teamMembers = [] } = useCRM();
 
-  const [email, setEmail] = useState('33binilb@gmail.com');
-  const [password, setPassword] = useState('••••••••••••••••');
-  const [role, setRole] = useState('ADMIN');
+  const [email, setEmail] = useState(teamMembers[0]?.email || '33binilb@gmail.com');
+  const [password, setPassword] = useState('PulseFlow@123');
+  const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
+  const [errorMsg, setErrorMsg] = useState('');
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    setErrorMsg('');
     setLoading(true);
-    if (loginAsRole) {
-      loginAsRole(role, email);
-    }
+    const res = await loginWithEmailPassword(email.trim(), password);
     setLoading(false);
+    if (!res?.ok) {
+      setErrorMsg(res?.error || 'Invalid work email or password.');
+      return;
+    }
     navigate('/dashboard');
   };
 
@@ -87,8 +89,8 @@ export const LoginPage = () => {
           </div>
 
           <div className="flex items-center justify-between text-xs text-slate-300 border-t border-white/15 pt-6">
-            <span>Meta Business Partner Ready • Webhook v20.0</span>
-            <span className="font-mono">ISO 27001 & SOC2 Type II</span>
+            <span>Meta Business Partner Ready • Webhook v21.0</span>
+            <span className="font-mono">Role-Based Access Control</span>
           </div>
         </div>
       </div>
@@ -98,51 +100,49 @@ export const LoginPage = () => {
         <div className="max-w-md w-full glass-panel-strong rounded-3xl p-8 shadow-2xl border border-white/80">
           <div className="mb-6">
             <h2 className="text-2xl font-bold text-slate-900 tracking-tight">
-              Sign in to Workspace
+              Team Member Sign In
             </h2>
             <p className="text-xs text-slate-600 mt-1">
-              Access your live WhatsApp inbox, AI scoring controls, and sales pipeline
+              Sign in with your Work Email and Password to access your CRM workspace
             </p>
           </div>
 
-          {/* Quick Role Demo Switcher */}
-          <div className="mb-6 p-3.5 rounded-2xl bg-white/60 border border-white/80">
-            <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
-              Quick Demo Role Preset
-            </label>
-            <div className="grid grid-cols-2 gap-2">
-              <button
-                type="button"
-                onClick={() => {
-                  setRole('Admin');
-                  setEmail('arjun.mehta@pulseflow.io');
-                }}
-                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  role === 'Admin'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-white/80 text-slate-600 border border-white'
-                }`}
-              >
-                Workspace Admin
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  setRole('Sales Agent');
-                  setEmail('priya.nair@pulseflow.io');
-                }}
-                className={`py-2 px-3 rounded-xl text-xs font-bold transition-all cursor-pointer ${
-                  role === 'Sales Agent'
-                    ? 'bg-slate-900 text-white shadow-xs'
-                    : 'bg-white/80 text-slate-600 border border-white'
-                }`}
-              >
-                Senior Sales Agent
-              </button>
+          {/* Quick Fill Active Team Accounts */}
+          {teamMembers.length > 0 && (
+            <div className="mb-5 p-3.5 rounded-2xl bg-white/60 border border-white/80">
+              <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Quick Fill Team Member Account
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {teamMembers.slice(0, 4).map((tm) => (
+                  <button
+                    key={tm.id}
+                    type="button"
+                    onClick={() => {
+                      setEmail(tm.email);
+                      setPassword('PulseFlow@123');
+                      setErrorMsg('');
+                    }}
+                    className={`py-1.5 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                      email.toLowerCase() === tm.email?.toLowerCase()
+                        ? 'bg-slate-900 text-white shadow-xs'
+                        : 'bg-white/80 text-slate-700 border border-white hover:bg-white'
+                    }`}
+                  >
+                    {tm.name} ({tm.role})
+                  </button>
+                ))}
+              </div>
             </div>
-          </div>
+          )}
 
           <form onSubmit={handleSubmit} className="space-y-4">
+            {errorMsg && (
+              <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-xs font-semibold text-rose-800">
+                {errorMsg}
+              </div>
+            )}
+
             <div>
               <label className="block text-xs font-bold text-slate-700 mb-1.5">
                 Work Email Address
@@ -152,6 +152,7 @@ export const LoginPage = () => {
                 <input
                   type="email"
                   required
+                  placeholder="name@company.com"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="w-full pl-10 pr-4 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
@@ -162,19 +163,29 @@ export const LoginPage = () => {
             <div>
               <div className="flex items-center justify-between mb-1.5">
                 <label className="text-xs font-bold text-slate-700">Password</label>
-                <span className="text-xs font-semibold text-emerald-700 cursor-pointer hover:underline">
-                  SSO / Passkey Enabled
-                </span>
+                <Link
+                  to="/forgot-password"
+                  className="text-xs font-semibold text-emerald-700 hover:underline"
+                >
+                  Forgot password?
+                </Link>
               </div>
               <div className="relative">
                 <Lock className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
                 <input
-                  type="password"
+                  type={showPassword ? 'text' : 'password'}
                   required
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
-                  className="w-full pl-10 pr-4 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
+                  className="w-full pl-10 pr-10 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
                 />
+                <button
+                  type="button"
+                  onClick={() => setShowPassword((prev) => !prev)}
+                  className="absolute right-3 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700 cursor-pointer"
+                >
+                  {showPassword ? <EyeOff className="w-4 h-4" /> : <Eye className="w-4 h-4" />}
+                </button>
               </div>
             </div>
 
@@ -183,15 +194,15 @@ export const LoginPage = () => {
               disabled={loading}
               className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 transition-all flex items-center justify-center gap-2 shadow-md shadow-emerald-600/20 cursor-pointer"
             >
-              {loading ? 'Authenticating JWT Session...' : 'Launch PulseFlow CRM'}
+              {loading ? 'Authenticating Account...' : 'Sign In to PulseFlow CRM'}
               <ArrowRight className="w-4 h-4" />
             </button>
           </form>
 
           <p className="text-xs text-center text-slate-600 mt-6">
-            Deploying a new WhatsApp Business number?{' '}
+            Need a new team member account?{' '}
             <Link to="/register" className="font-bold text-emerald-700 hover:underline">
-              Create Workspace
+              Create Team Account
             </Link>
           </p>
         </div>
@@ -207,9 +218,9 @@ export const RegisterPage = () => {
   const [form, setForm] = useState({
     name: '',
     email: '',
+    phone: '+91 ',
     password: '',
-    company: '',
-    role: 'Admin',
+    role: 'AGENT',
   });
   const [loading, setLoading] = useState(false);
   const [errorMsg, setErrorMsg] = useState('');
@@ -220,19 +231,19 @@ export const RegisterPage = () => {
     setErrorMsg('');
 
     const result = await registerUser({
-      name: form.name || 'Vikramaditya Rao',
-      email: form.email || 'vikram@company.io',
-      password: form.password || 'PulseFlow2025!',
-      company: form.company || 'Enterprise Workspace',
+      name: form.name.trim(),
+      email: form.email.trim().toLowerCase(),
+      phone: form.phone.trim(),
+      password: form.password,
       role: form.role,
     });
 
     setLoading(false);
-    if (result?.success === false) {
-      setErrorMsg(result.error || 'Registration failed');
+    if (!result?.ok) {
+      setErrorMsg(result?.error || 'Registration failed');
       return;
     }
-    navigate('/');
+    navigate('/dashboard');
   };
 
   return (
@@ -250,14 +261,14 @@ export const RegisterPage = () => {
           <div>
             <span className="font-bold text-lg text-slate-900">PulseFlow CRM</span>
             <span className="block text-[10px] font-mono text-emerald-700 uppercase font-bold">
-              New Workspace Provisioning
+              Team Account Registration
             </span>
           </div>
         </div>
 
-        <h1 className="text-2xl font-bold text-slate-900">Create Your AI CRM Workspace</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Create Team Member Account</h1>
         <p className="text-xs text-slate-600 mt-1 mb-6">
-          Connect your Meta WhatsApp Business Cloud API and start qualifying leads automatically.
+          Register with your work email and password to access the CRM workspace.
         </p>
 
         <form onSubmit={handleSubmit} className="space-y-4">
@@ -273,33 +284,52 @@ export const RegisterPage = () => {
               required
               value={form.name}
               onChange={(e) => setForm({ ...form, name: e.target.value })}
-              placeholder="Arjun Mehta"
+              placeholder="e.g., Arjun Mehta"
               className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
             />
           </div>
 
           <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Company / Organization *</label>
-            <input
-              type="text"
-              required
-              value={form.company}
-              onChange={(e) => setForm({ ...form, company: e.target.value })}
-              placeholder="Kinetix Cloud India"
-              className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-bold text-slate-700 mb-1">Work Email *</label>
+            <label className="block text-xs font-bold text-slate-700 mb-1">
+              Work Email (Used for Login) *
+            </label>
             <input
               type="email"
               required
               value={form.email}
               onChange={(e) => setForm({ ...form, email: e.target.value })}
-              placeholder="arjun@kinetix.io"
+              placeholder="arjun@company.com"
               className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
             />
+          </div>
+
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Phone Number</label>
+              <div className="relative">
+                <Phone className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+                <input
+                  type="text"
+                  value={form.phone}
+                  onChange={(e) => setForm({ ...form, phone: e.target.value })}
+                  placeholder="+91 98470 00000"
+                  className="w-full pl-8 pr-3 py-2.5 text-xs font-mono bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-xs font-bold text-slate-700 mb-1">Role *</label>
+              <select
+                value={form.role}
+                onChange={(e) => setForm({ ...form, role: e.target.value })}
+                className="w-full px-3 py-2.5 text-xs font-semibold bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
+              >
+                <option value="ADMIN">ADMIN</option>
+                <option value="MANAGER">MANAGER</option>
+                <option value="AGENT">AGENT</option>
+              </select>
+            </div>
           </div>
 
           <div>
@@ -307,9 +337,10 @@ export const RegisterPage = () => {
             <input
               type="password"
               required
+              minLength={6}
               value={form.password}
               onChange={(e) => setForm({ ...form, password: e.target.value })}
-              placeholder="Min. 8 characters"
+              placeholder="Min. 6 characters"
               className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
             />
           </div>
@@ -319,12 +350,12 @@ export const RegisterPage = () => {
             disabled={loading}
             className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
           >
-            {loading ? 'Provisioning Workspace...' : 'Provision Workspace & Continue'}
+            {loading ? 'Creating Account...' : 'Create Account & Sign In'}
           </button>
         </form>
 
         <p className="text-xs text-center text-slate-600 mt-6">
-          Already have a workspace?{' '}
+          Already have an account?{' '}
           <Link to="/login" className="font-bold text-emerald-700 hover:underline">
             Sign In
           </Link>
@@ -335,7 +366,7 @@ export const RegisterPage = () => {
 };
 
 export const ForgotPasswordPage = () => {
-  const [email, setEmail] = useState('arjun.mehta@pulseflow.io');
+  const [email, setEmail] = useState('33binilb@gmail.com');
   const [sent, setSent] = useState(false);
 
   const handleSubmit = (e) => {
@@ -350,20 +381,20 @@ export const ForgotPasswordPage = () => {
     >
       <div className="fixed inset-0 bg-slate-900/20 backdrop-blur-[2px] pointer-events-none" />
       <div className="max-w-md w-full glass-panel-strong rounded-3xl p-8 shadow-2xl border border-white/80 relative z-10">
-        <h1 className="text-2xl font-bold text-slate-900">Reset Workspace Password</h1>
+        <h1 className="text-2xl font-bold text-slate-900">Reset Account Password</h1>
         <p className="text-xs text-slate-600 mt-1 mb-6">
-          Enter your work email to receive a secure password reset link.
+          Enter your work email to proceed to password reset.
         </p>
         {sent ? (
           <div className="space-y-4">
             <div className="p-4 rounded-2xl bg-emerald-500/15 border border-emerald-300 text-xs text-emerald-900 font-medium">
-              Reset instructions dispatched to <strong>{email}</strong>.
+              Account verified for <strong>{email}</strong>. Click below to set a new password.
             </div>
             <Link
-              to="/reset-password"
+              to={`/reset-password?email=${encodeURIComponent(email)}`}
               className="block w-full py-3 text-center rounded-xl bg-slate-900 text-white text-xs font-bold hover:bg-slate-800"
             >
-              Proceed to Reset Password Form
+              Proceed to Set New Password
             </Link>
           </div>
         ) : (
@@ -380,9 +411,9 @@ export const ForgotPasswordPage = () => {
             </div>
             <button
               type="submit"
-              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20"
+              className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 cursor-pointer"
             >
-              Send Reset Link
+              Continue
             </button>
           </form>
         )}
@@ -398,10 +429,24 @@ export const ForgotPasswordPage = () => {
 
 export const ResetPasswordPage = () => {
   const navigate = useNavigate();
+  const { changePassword } = useCRM();
+  const params = new URLSearchParams(window.location.search);
+  const [email, setEmail] = useState(params.get('email') || '33binilb@gmail.com');
   const [password, setPassword] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
 
-  const handleSubmit = (e) => {
+  const handleSubmit = async (e) => {
     e.preventDefault();
+    setErrorMsg('');
+    const res = await changePassword({
+      email,
+      newPassword: password,
+      adminOverride: true,
+    });
+    if (!res?.ok) {
+      setErrorMsg(res?.error || 'Could not reset password.');
+      return;
+    }
     navigate('/login');
   };
 
@@ -417,20 +462,36 @@ export const ResetPasswordPage = () => {
           Choose a strong password for your PulseFlow CRM account.
         </p>
         <form onSubmit={handleSubmit} className="space-y-4">
+          {errorMsg && (
+            <div className="p-3 rounded-xl bg-rose-500/15 border border-rose-300 text-xs font-semibold text-rose-800">
+              {errorMsg}
+            </div>
+          )}
+          <div>
+            <label className="block text-xs font-bold text-slate-700 mb-1.5">Work Email</label>
+            <input
+              type="email"
+              required
+              value={email}
+              onChange={(e) => setEmail(e.target.value)}
+              className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+            />
+          </div>
           <div>
             <label className="block text-xs font-bold text-slate-700 mb-1.5">New Password</label>
             <input
               type="password"
               required
+              minLength={6}
               value={password}
               onChange={(e) => setPassword(e.target.value)}
-              placeholder="Min. 8 characters"
+              placeholder="Min. 6 characters"
               className="w-full px-3.5 py-2.5 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
             />
           </div>
           <button
             type="submit"
-            className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20"
+            className="w-full py-3 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-sm font-bold hover:from-emerald-500 hover:to-teal-400 shadow-md shadow-emerald-600/20 cursor-pointer"
           >
             Update Password & Sign In
           </button>
@@ -439,4 +500,3 @@ export const ResetPasswordPage = () => {
     </div>
   );
 };
-

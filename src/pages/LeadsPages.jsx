@@ -901,9 +901,19 @@ export const LeadDetailsPage = () => {
                 <span className="text-slate-600">Acquisition Source</span>
                 <span className="font-semibold text-slate-900">{lead.source || 'WhatsApp Inbound'}</span>
               </div>
-              <div className="flex justify-between py-2">
-                <span className="text-slate-600">Assigned Owner</span>
-                <span className="font-semibold text-slate-900">{assignedRep.name}</span>
+              <div className="flex items-center justify-between py-2">
+                <span className="text-slate-600">Handled By</span>
+                <select
+                  value={lead.assignedAgentId || assignedRep?.id || 'admin-1'}
+                  onChange={(e) => updateLead(lead.id, { assignedAgentId: e.target.value })}
+                  className="px-2.5 py-1 rounded-xl border border-white/80 bg-white/80 font-semibold text-slate-900 text-xs focus:outline-none focus:border-emerald-500"
+                >
+                  {teamMembers.map((tm) => (
+                    <option key={tm.id} value={tm.id}>
+                      {tm.name} ({tm.role})
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

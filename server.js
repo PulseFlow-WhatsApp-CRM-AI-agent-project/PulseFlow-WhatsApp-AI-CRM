@@ -16,7 +16,9 @@ import mongoose, {
   KnowledgeBase,
   KnowledgeGap,
   Setting,
-  Notification
+  Notification,
+  hashPassword,
+  verifyPassword
 } from './db.js';
 import {
   INITIAL_AI_SETTINGS,
@@ -1392,15 +1394,61 @@ app.post('/api/whatsapp/test-send', async (req, res) => {
 // REST API ROUTES FOR MONGODB CRM OPERATIONS
 // ============================================================================
 
-// Helper to strip Mongoose _id / __v
+// Helper to strip Mongoose _id / __v and sensitive password hash fields
 const cleanDoc = (doc) => {
   if (!doc) return null;
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc;
-  const { _id, __v, ...rest } = obj;
+  const { _id, __v, passwordHash, passwordSalt, password, ...rest } = obj;
   return rest;
 };
 
 const cleanList = (docs) => docs.map(cleanDoc);
+
+const JWT_SECRET = process.env.JWT_SECRET || 'pulseflow-whatsapp-crm-jwt-secret-2026';
+
+function signJwtToken(payload) {
+  const header = Buffer.from(JSON.stringify({ alg: 'HS256', typ: 'JWT' })).toString('base64url');
+  const body = Buffer.from(
+    JSON.stringify({
+      ...payload,
+      iat: Math.floor(Date.now() / 1000),
+      exp: Math.floor(Date.now() / 1000) + 60 * 60 * 24 * 7
+    })
+  ).toString('base64url');
+  const signature = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${header}.${body}`)
+    .digest('base64url');
+  return `${header}.${body}.${signature}`;
+}
+
+function verifyJwtToken(token) {
+  if (!token || typeof token !== 'string') return null;
+  const parts = token.split('.');
+  if (parts.length !== 3) return null;
+  const [header, body, sig] = parts;
+  const expectedSig = crypto
+    .createHmac('sha256', JWT_SECRET)
+    .update(`${header}.${body}`)
+    .digest('base64url');
+  if (!safeCompare(sig, expectedSig)) return null;
+  try {
+    const decoded = JSON.parse(Buffer.from(body, 'base64url').toString('utf8'));
+    if (decoded.exp && decoded.exp < Math.floor(Date.now() / 1000)) return null;
+    return decoded;
+  } catch {
+    return null;
+  }
+}
+
+function extractAuthUserFromReq(req) {
+  const authHeader = req.get('authorization') || '';
+  if (authHeader.startsWith('Bearer ')) {
+    const token = authHeader.slice(7).trim();
+    return verifyJwtToken(token);
+  }
+  return null;
+}
 
 // Compute dynamic strategic findings from real database leads & conversations
 function computeDynamicFindings(leads, contacts, conversations) {
@@ -1527,15 +1575,261 @@ app.get('/api/bootstrap', async (_req, res) => {
   }
 });
 
+// 1B. Authentication & Session Routes (Email + Password)
+app.post('/api/auth/login', async (req, res) => {
+  try {
+    await connectDB();
+    const emailRaw = String(req.body?.email || '').trim().toLowerCase();
+    const passwordRaw = String(req.body?.password || '');
+
+    if (!emailRaw || !passwordRaw) {
+      return res.status(400).json({ error: 'Work email and password are required.' });
+    }
+
+    const allMembers = await TeamMember.find({});
+    const member = allMembers.find(
+      (m) => String(m.email || '').trim().toLowerCase() === emailRaw
+    );
+
+    if (!member) {
+      return res.status(401).json({ error: 'Invalid work email or password.' });
+    }
+
+    if (member.isActive === false) {
+      return res.status(403).json({
+        error: 'This team account is currently deactivated. Contact your workspace Admin.'
+      });
+    }
+
+    let validPassword = false;
+    if (member.passwordHash && member.passwordSalt) {
+      validPassword = verifyPassword(passwordRaw, member.passwordHash, member.passwordSalt);
+    } else {
+      // Legacy fallback for unseeded records: accept default PulseFlow@123 and hash it
+      if (passwordRaw === 'PulseFlow@123') {
+        validPassword = true;
+        const { passwordHash, passwordSalt } = hashPassword(passwordRaw);
+        await TeamMember.findOneAndUpdate(
+          { id: member.id },
+          { $set: { passwordHash, passwordSalt } }
+        );
+      }
+    }
+
+    if (!validPassword) {
+      return res.status(401).json({ error: 'Invalid work email or password.' });
+    }
+
+    const nowLoginStr = new Date().toLocaleString('en-IN', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const updatedMember = await TeamMember.findOneAndUpdate(
+      { id: member.id },
+      { $set: { lastLoginAt: nowLoginStr } },
+      { new: true }
+    );
+
+    const cleanUser = cleanDoc(updatedMember || member);
+    const token = signJwtToken({
+      id: cleanUser.id,
+      email: cleanUser.email,
+      role: cleanUser.role
+    });
+
+    return res.json({
+      ok: true,
+      token,
+      user: cleanUser
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/register', async (req, res) => {
+  try {
+    await connectDB();
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const phone = String(req.body?.phone || '').trim();
+    const password = String(req.body?.password || '');
+    const roleRaw = String(req.body?.role || 'ADMIN').toUpperCase();
+    const role = ['ADMIN', 'MANAGER', 'AGENT'].includes(roleRaw) ? roleRaw : 'ADMIN';
+
+    if (!name || !email || !password) {
+      return res.status(400).json({ error: 'Full name, work email, and password are required.' });
+    }
+    if (password.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    const allMembers = await TeamMember.find({});
+    const existing = allMembers.find(
+      (m) => String(m.email || '').trim().toLowerCase() === email
+    );
+    if (existing) {
+      return res.status(409).json({ error: 'A team member with this email already exists.' });
+    }
+
+    const { passwordHash, passwordSalt } = hashPassword(password);
+    const nowLoginStr = new Date().toLocaleString('en-IN', {
+      month: 'short',
+      day: 'numeric',
+      hour: '2-digit',
+      minute: '2-digit'
+    });
+
+    const created = await TeamMember.create({
+      id: `usr-${Date.now()}`,
+      name,
+      email,
+      phone,
+      role,
+      passwordHash,
+      passwordSalt,
+      isActive: true,
+      assignedLeadsCount: 0,
+      activeChatsCount: 0,
+      lastLoginAt: nowLoginStr,
+      conversionRate: 0,
+      avgResponseTime: '—'
+    });
+
+    const cleanUser = cleanDoc(created);
+    const token = signJwtToken({
+      id: cleanUser.id,
+      email: cleanUser.email,
+      role: cleanUser.role
+    });
+
+    return res.status(201).json({
+      ok: true,
+      token,
+      user: cleanUser
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.get('/api/auth/me', async (req, res) => {
+  try {
+    await connectDB();
+    const decoded = extractAuthUserFromReq(req);
+    const targetId = decoded?.id || req.query.userId;
+    if (!targetId) {
+      return res.status(401).json({ error: 'Not authenticated' });
+    }
+    const member = await TeamMember.findOne({ id: targetId });
+    if (!member || member.isActive === false) {
+      return res.status(401).json({ error: 'User account not found or inactive' });
+    }
+    return res.json({ ok: true, user: cleanDoc(member) });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
+app.post('/api/auth/change-password', async (req, res) => {
+  try {
+    await connectDB();
+    const decoded = extractAuthUserFromReq(req);
+    const { userId, email, currentPassword, newPassword, adminOverride } = req.body || {};
+
+    if (!newPassword || String(newPassword).length < 6) {
+      return res
+        .status(400)
+        .json({ error: 'New password must be at least 6 characters long.' });
+    }
+
+    let member = null;
+    if (userId) {
+      member = await TeamMember.findOne({ id: userId });
+    } else if (email) {
+      const allMembers = await TeamMember.find({});
+      member = allMembers.find(
+        (m) => String(m.email || '').trim().toLowerCase() === String(email).trim().toLowerCase()
+      );
+    } else if (decoded?.id) {
+      member = await TeamMember.findOne({ id: decoded.id });
+    }
+
+    if (!member) {
+      return res.status(404).json({ error: 'Team member account not found.' });
+    }
+
+    // Require currentPassword verification unless an authenticated ADMIN is resetting a member's password
+    const isCallerAdmin = decoded?.role === 'ADMIN' || Boolean(adminOverride);
+    if (!isCallerAdmin || currentPassword) {
+      if (!currentPassword) {
+        return res.status(400).json({ error: 'Current password is required to change your password.' });
+      }
+      const isCurrentValid =
+        member.passwordHash && member.passwordSalt
+          ? verifyPassword(currentPassword, member.passwordHash, member.passwordSalt)
+          : currentPassword === 'PulseFlow@123';
+
+      if (!isCurrentValid) {
+        return res.status(401).json({ error: 'Current password is incorrect.' });
+      }
+    }
+
+    const { passwordHash, passwordSalt } = hashPassword(newPassword);
+    const updated = await TeamMember.findOneAndUpdate(
+      { id: member.id },
+      { $set: { passwordHash, passwordSalt } },
+      { new: true }
+    );
+
+    return res.json({
+      ok: true,
+      user: cleanDoc(updated)
+    });
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+});
+
 // 2. Team Members CRUD
 app.post('/api/team', async (req, res) => {
   try {
+    await connectDB();
+    const name = String(req.body?.name || '').trim();
+    const email = String(req.body?.email || '').trim().toLowerCase();
+    const phone = String(req.body?.phone || '').trim();
+    const roleRaw = String(req.body?.role || 'AGENT').toUpperCase();
+    const role = ['ADMIN', 'MANAGER', 'AGENT'].includes(roleRaw) ? roleRaw : 'AGENT';
+    const rawPassword = String(req.body?.password || 'PulseFlow@123');
+
+    if (!name || !email) {
+      return res.status(400).json({ error: 'Full name and work email are required.' });
+    }
+    if (rawPassword.length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+    }
+
+    const allMembers = await TeamMember.find({});
+    const duplicate = allMembers.find(
+      (m) => String(m.email || '').trim().toLowerCase() === email
+    );
+    if (duplicate) {
+      return res.status(409).json({ error: 'A team member with this work email already exists.' });
+    }
+
+    const { passwordHash, passwordSalt } = hashPassword(rawPassword);
+
     const payload = {
       id: req.body.id || `usr-${Date.now()}`,
-      name: req.body.name,
-      email: req.body.email,
-      role: req.body.role || 'AGENT',
-      phone: req.body.phone || '',
+      name,
+      email,
+      role,
+      phone,
+      passwordHash,
+      passwordSalt,
       isActive: req.body.isActive ?? true,
       assignedLeadsCount: 0,
       activeChatsCount: 0,
@@ -1552,9 +1846,54 @@ app.post('/api/team', async (req, res) => {
 
 app.patch('/api/team/:id', async (req, res) => {
   try {
+    await connectDB();
+    const targetId = req.params.id;
+    const existing = await TeamMember.findOne({ id: targetId });
+    if (!existing) {
+      return res.status(404).json({ error: 'Team member not found.' });
+    }
+
+    const updateFields = {};
+    if (typeof req.body.name === 'string' && req.body.name.trim()) {
+      updateFields.name = req.body.name.trim();
+    }
+    if (typeof req.body.email === 'string' && req.body.email.trim()) {
+      const normalizedEmail = req.body.email.trim().toLowerCase();
+      const allMembers = await TeamMember.find({});
+      const duplicate = allMembers.find(
+        (m) => m.id !== targetId && String(m.email || '').trim().toLowerCase() === normalizedEmail
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: 'Another team member is already using this email.' });
+      }
+      updateFields.email = normalizedEmail;
+    }
+    if (typeof req.body.phone === 'string') {
+      updateFields.phone = req.body.phone.trim();
+    }
+    if (typeof req.body.role === 'string') {
+      const roleUpper = req.body.role.toUpperCase();
+      if (['ADMIN', 'MANAGER', 'AGENT'].includes(roleUpper)) {
+        updateFields.role = roleUpper;
+      }
+    }
+    if (typeof req.body.isActive === 'boolean') {
+      updateFields.isActive = req.body.isActive;
+    }
+
+    const newPass = req.body.newPassword || req.body.password;
+    if (typeof newPass === 'string' && newPass.trim().length > 0) {
+      if (newPass.trim().length < 6) {
+        return res.status(400).json({ error: 'Password must be at least 6 characters.' });
+      }
+      const { passwordHash, passwordSalt } = hashPassword(newPass.trim());
+      updateFields.passwordHash = passwordHash;
+      updateFields.passwordSalt = passwordSalt;
+    }
+
     const updated = await TeamMember.findOneAndUpdate(
-      { id: req.params.id },
-      { $set: req.body },
+      { id: targetId },
+      { $set: updateFields },
       { new: true }
     );
     res.json(cleanDoc(updated));
