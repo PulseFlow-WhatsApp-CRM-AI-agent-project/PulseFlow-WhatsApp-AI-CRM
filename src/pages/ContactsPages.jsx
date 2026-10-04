@@ -1,264 +1,287 @@
 import React, { useState, useMemo } from 'react';
 import { Link, useParams, useNavigate } from 'react-router-dom';
-import { Search, Plus, Trash2, ArrowLeft, MessageSquare, X } from 'lucide-react';
+import {
+  Search,
+  Plus,
+  Building2,
+  MessageSquare,
+  ChevronLeft,
+  CheckCircle2,
+  ArrowUpRight,
+  Send,
+  X,
+} from 'lucide-react';
 import { useCRM } from '../context/CRMContext';
 
 export const ContactsListPage = () => {
-  const { contacts, addContact, deleteContact } = useCRM();
   const navigate = useNavigate();
+  const { contacts = [], leads = [], addContact, startOrOpenConversation } = useCRM();
 
-  const [search, setSearch] = useState('');
-  const [sourceFilter, setSourceFilter] = useState('ALL');
-  const [showModal, setShowModal] = useState(false);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [langFilter, setLangFilter] = useState('ALL');
+  const [showAddModal, setShowAddModal] = useState(false);
 
-  const [name, setName] = useState('');
-  const [phone, setPhone] = useState('+91 ');
-  const [email, setEmail] = useState('');
-  const [company, setCompany] = useState('');
-  const [location, setLocation] = useState('Kochi, Kerala');
-  const [source, setSource] = useState('WhatsApp Inbound');
-  const [tagsStr, setTagsStr] = useState('WhatsApp Lead, Inquiry');
+  const [contactForm, setContactForm] = useState({
+    name: '',
+    company: '',
+    phone: '+91 ',
+    email: '',
+    location: 'Kochi, Kerala',
+    preferredLanguage: 'English',
+  });
 
-  const sources = useMemo(
-    () => ['ALL', ...Array.from(new Set(contacts.map((c) => c.source)))],
-    [contacts]
-  );
+  const languages = useMemo(() => {
+    const set = new Set(contacts.map((c) => c.preferredLanguage).filter(Boolean));
+    return ['ALL', ...Array.from(set)];
+  }, [contacts]);
 
   const filteredContacts = useMemo(() => {
     return contacts.filter((c) => {
-      if (sourceFilter !== 'ALL' && c.source !== sourceFilter) return false;
-      if (search.trim()) {
-        const q = search.toLowerCase();
-        return (
-          c.name.toLowerCase().includes(q) ||
-          c.phone.toLowerCase().includes(q) ||
-          c.email.toLowerCase().includes(q) ||
-          c.company.toLowerCase().includes(q) ||
-          c.tags.some((t) => t.toLowerCase().includes(q))
-        );
+      if (langFilter !== 'ALL' && c.preferredLanguage !== langFilter) return false;
+      const name = (c.name || '').toLowerCase();
+      const company = (c.company || '').toLowerCase();
+      const phone = c.phone || '';
+      if (
+        searchQuery &&
+        !name.includes(searchQuery.toLowerCase()) &&
+        !company.includes(searchQuery.toLowerCase()) &&
+        !phone.includes(searchQuery)
+      ) {
+        return false;
       }
       return true;
     });
-  }, [contacts, sourceFilter, search]);
+  }, [contacts, langFilter, searchQuery]);
 
-  const handleCreate = (e) => {
+  const handleAddContact = (e) => {
     e.preventDefault();
-    addContact({
-      name,
-      phone,
-      email,
-      company,
-      location,
-      source,
-      tags: tagsStr
-        .split(',')
-        .map((t) => t.trim())
-        .filter(Boolean)
-    });
-    setShowModal(false);
-    setName('');
-    setPhone('+91 ');
-    setEmail('');
-    setCompany('');
+    if (!contactForm.name.trim()) return;
+    const created = addContact(
+      {
+        name: contactForm.name.trim(),
+        company: contactForm.company.trim() || 'Inbound Business',
+        phone: contactForm.phone.trim() || '+91 98470 00000',
+        email: contactForm.email.trim() || 'contact@company.in',
+        location: contactForm.location,
+        preferredLanguage: contactForm.preferredLanguage,
+        roleTitle: 'Customer',
+        source: 'WhatsApp Inbound',
+        tags: ['WhatsApp Opt-In'],
+      },
+      { createLead: true, createConversation: true }
+    );
+    setShowAddModal(false);
+    navigate(`/contacts/${created.id}`);
+  };
+
+  const handleOpenWhatsApp = async (contact) => {
+    const linkedLead = leads.find((l) => l.contactId === contact.id);
+    const conv = await startOrOpenConversation(contact.id, linkedLead?.id || '');
+    navigate(`/inbox?convId=${conv?.id || 'conv-1'}`);
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1440px] mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] mx-auto">
+      {/* Header */}
+      <div className="glass-panel rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <div className="text-xs text-slate-500">WhatsApp Customer Directory & Segmentation</div>
-          <h1 className="text-xl font-bold text-slate-900 mt-0.5">
-            Contacts ({filteredContacts.length})
+          <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+            Verified WhatsApp Contacts Directory ({filteredContacts.length})
           </h1>
+          <p className="text-sm text-slate-600 mt-0.5">
+            Opt-in customer profiles synced with Meta WhatsApp Business Cloud API
+          </p>
         </div>
         <button
-          onClick={() => setShowModal(true)}
-          className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 flex items-center gap-1.5 self-start"
+          onClick={() => setShowAddModal(true)}
+          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold hover:from-emerald-500 hover:to-teal-400 transition-all shadow-md shadow-emerald-600/20 w-fit cursor-pointer"
         >
-          <Plus className="w-3.5 h-3.5" />
-          <span>Add Contact</span>
+          <Plus className="w-4 h-4" />
+          Add WhatsApp Contact
         </button>
       </div>
 
-      <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-4">
-        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-          <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-lg">
-            {sources.map((src) => (
-              <button
-                key={src}
-                onClick={() => setSourceFilter(src)}
-                className={`px-3 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap ${
-                  sourceFilter === src
-                    ? 'bg-white text-slate-900 shadow-xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
-                }`}
-              >
-                {src}
-              </button>
-            ))}
-          </div>
-
-          <div className="relative w-full sm:w-72">
-            <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-            <input
-              type="text"
-              value={search}
-              onChange={(e) => setSearch(e.target.value)}
-              placeholder="Search name, phone, company, tag..."
-              className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900"
-            />
-          </div>
+      {/* Filters */}
+      <div className="glass-panel rounded-3xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {languages.map((lang) => (
+            <button
+              key={lang}
+              onClick={() => setLangFilter(lang)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                langFilter === lang
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white/60 text-slate-700 hover:bg-white border border-white/75'
+              }`}
+            >
+              {lang === 'ALL' ? 'All Languages' : lang}
+            </button>
+          ))}
         </div>
 
-        <div className="overflow-x-auto">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead>
-              <tr className="border-b border-slate-200 text-slate-500">
-                <th className="py-2.5 px-3 font-semibold">Name & Phone</th>
-                <th className="py-2.5 px-3 font-semibold">Company & Location</th>
-                <th className="py-2.5 px-3 font-semibold">Source & Tags</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Conversations</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Messages</th>
-                <th className="py-2.5 px-3 font-semibold text-right">Actions</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-slate-100">
-              {filteredContacts.map((c) => (
-                <tr key={c.id} className="hover:bg-slate-50">
-                  <td className="py-3 px-3">
-                    <Link
-                      to={`/contacts/${c.id}`}
-                      className="font-bold text-slate-900 hover:underline"
-                    >
-                      {c.name}
-                    </Link>
-                    <div className="font-mono text-[11px] text-slate-500 tabular-nums">
-                      {c.phone} · {c.email}
-                    </div>
-                  </td>
-                  <td className="py-3 px-3">
-                    <div className="font-medium text-slate-800">{c.company}</div>
-                    <div className="text-[11px] text-slate-500">{c.location}</div>
-                  </td>
-                  <td className="py-3 px-3">
-                    <div className="text-slate-700 font-medium">{c.source}</div>
-                    <div className="text-[11px] text-slate-500 mt-0.5">
-                      {c.tags.join(' · ')}
-                    </div>
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums">
-                    {c.totalConversations}
-                  </td>
-                  <td className="py-3 px-3 text-right font-mono tabular-nums">
-                    {c.totalMessages}
-                  </td>
-                  <td className="py-3 px-3 text-right whitespace-nowrap space-x-2">
-                    <button
-                      onClick={() => navigate(`/contacts/${c.id}`)}
-                      className="px-2.5 py-1 text-xs font-semibold bg-slate-900 text-white rounded hover:bg-slate-800"
-                    >
-                      View Profile
-                    </button>
-                    <button
-                      onClick={() => deleteContact(c.id)}
-                      className="p-1 text-slate-400 hover:text-rose-600"
-                      title="Delete Contact"
-                    >
-                      <Trash2 className="w-3.5 h-3.5 inline" />
-                    </button>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+        <div className="relative w-full sm:w-80">
+          <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search name, company, phone..."
+            className="w-full pl-9 pr-4 py-2 text-xs bg-white/75 border border-white/80 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500 backdrop-blur-md"
+          />
         </div>
       </div>
 
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-lg max-w-md w-full p-6 space-y-4">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-900">Create Customer Contact</h3>
-              <button onClick={() => setShowModal(false)} className="text-slate-400 hover:text-slate-700">
+      {/* Contact Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-5">
+        {filteredContacts.map((contact) => {
+          const initials = (contact.name || 'WC')
+            .split(' ')
+            .map((n) => n[0])
+            .join('')
+            .slice(0, 2)
+            .toUpperCase();
+
+          return (
+            <div
+              key={contact.id}
+              className="glass-panel rounded-3xl p-5 hover:bg-white/75 hover:shadow-lg transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex items-center gap-3.5">
+                    <div className="w-12 h-12 rounded-2xl bg-slate-900 text-white font-bold text-sm flex items-center justify-center shrink-0 shadow-xs">
+                      {initials}
+                    </div>
+                    <div>
+                      <Link
+                        to={`/contacts/${contact.id}`}
+                        className="text-base font-bold text-slate-900 hover:text-emerald-700 transition-colors"
+                      >
+                        {contact.name}
+                      </Link>
+                      <p className="text-xs text-slate-600 flex items-center gap-1 mt-0.5">
+                        <Building2 className="w-3.5 h-3.5 text-slate-400" />
+                        {contact.company || 'Inbound Prospect'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="inline-flex items-center gap-1 px-2.5 py-0.5 rounded-full text-[10px] font-semibold bg-emerald-500/15 text-emerald-800 border border-emerald-300">
+                    <CheckCircle2 className="w-3 h-3" />
+                    Opted-In
+                  </span>
+                </div>
+
+                <div className="mt-4 pt-4 border-t border-white/50 space-y-2 text-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">WhatsApp Number</span>
+                    <span className="font-mono font-semibold text-slate-800">{contact.phone}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Email</span>
+                    <span className="text-slate-800">{contact.email || '—'}</span>
+                  </div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-slate-500">Location & Language</span>
+                    <span className="font-medium text-slate-800">
+                      {contact.location || 'Kerala'} · {contact.preferredLanguage || 'English'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="mt-5 pt-4 border-t border-white/60 flex items-center justify-between">
+                <button
+                  onClick={() => handleOpenWhatsApp(contact)}
+                  className="inline-flex items-center gap-1.5 text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
+                >
+                  <MessageSquare className="w-3.5 h-3.5" />
+                  Send WhatsApp
+                </button>
+                <Link
+                  to={`/contacts/${contact.id}`}
+                  className="inline-flex items-center gap-1 px-3.5 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors"
+                >
+                  Contact Profile
+                  <ArrowUpRight className="w-3.5 h-3.5" />
+                </Link>
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Add Contact Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glass-panel-strong rounded-3xl max-w-md w-full p-6 shadow-2xl border border-white/80">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">Add Verified WhatsApp Contact</h3>
+              <button
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/60"
+              >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleCreate} className="space-y-3 text-xs">
+            <form onSubmit={handleAddContact} className="space-y-3.5">
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name *</label>
                 <input
                   type="text"
                   required
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  value={contactForm.name}
+                  onChange={(e) => setContactForm({ ...contactForm, name: e.target.value })}
+                  placeholder="Rohan Kulkarni"
+                  className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Phone Number</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Company *</label>
                   <input
                     type="text"
                     required
-                    value={phone}
-                    onChange={(e) => setPhone(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
+                    value={contactForm.company}
+                    onChange={(e) => setContactForm({ ...contactForm, company: e.target.value })}
+                    placeholder="Kulkarni Retail Group"
+                    className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Email</label>
-                  <input
-                    type="email"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Company</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">WhatsApp Phone *</label>
                   <input
                     type="text"
-                    value={company}
-                    onChange={(e) => setCompany(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                  />
-                </div>
-                <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Location</label>
-                  <input
-                    type="text"
-                    value={location}
-                    onChange={(e) => setLocation(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                    required
+                    value={contactForm.phone}
+                    onChange={(e) => setContactForm({ ...contactForm, phone: e.target.value })}
+                    placeholder="+91 98470 11209"
+                    className="w-full px-3.5 py-2 text-sm font-mono bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
               <div>
-                <label className="block font-semibold text-slate-700 mb-1">
-                  Tags (comma-separated)
-                </label>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">Email Address</label>
                 <input
-                  type="text"
-                  value={tagsStr}
-                  onChange={(e) => setTagsStr(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                  type="email"
+                  value={contactForm.email}
+                  onChange={(e) => setContactForm({ ...contactForm, email: e.target.value })}
+                  placeholder="rohan@kulkarniretail.in"
+                  className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                 />
               </div>
-              <div className="pt-2 flex justify-end gap-2">
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowModal(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-lg"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 rounded-xl border border-white/80 bg-white/60 text-xs font-semibold text-slate-600 hover:bg-white"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-lg"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 shadow-sm"
                 >
-                  Create Contact
+                  Save Contact
                 </button>
               </div>
             </form>
@@ -273,245 +296,173 @@ export const ContactDetailsPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const {
-    contacts,
-    leads,
-    conversations,
-    updateContact,
+    contacts = [],
+    leads = [],
+    conversations = [],
+    messagesByConv = {},
     addContactNote,
-    startOrOpenConversation
+    sendAgentMessage,
+    startOrOpenConversation,
   } = useCRM();
 
-  const contact = contacts.find((c) => c.id === id);
-  const contactLeads = leads.filter((l) => l.contactId === contact?.id);
-  const contactConvs = conversations.filter((c) => c.contactId === contact?.id);
+  const contact = contacts.find((c) => c.id === id) || contacts[0];
+  const linkedLead = leads.find((l) => l.contactId === contact?.id) || leads[0];
+  const linkedConv =
+    conversations.find((c) => c.contactId === contact?.id) || conversations[0];
+  const threadMessages = linkedConv ? messagesByConv[linkedConv.id] || [] : [];
 
-  const [newTag, setNewTag] = useState('');
-  const [noteContent, setNoteContent] = useState('');
+  const [msgText, setMsgText] = useState('');
+  const [noteText, setNoteText] = useState('');
 
-  if (!contact) {
-    return (
-      <div className="p-8 max-w-lg mx-auto my-12 bg-white border border-slate-200 rounded-xl space-y-3 text-center">
-        <div className="text-sm font-bold text-slate-900">Contact Not Found</div>
-        <p className="text-xs text-slate-500">This contact record may have been deleted.</p>
-        <Link
-          to="/contacts"
-          className="inline-block px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg"
-        >
-          Back to Contacts Directory
-        </Link>
-      </div>
-    );
-  }
+  if (!contact) return null;
 
-  const handleOpenContactChat = async () => {
-    if (contactConvs[0]) {
-      navigate(`/inbox?convId=${contactConvs[0].id}`);
-      return;
-    }
-    const reopened = await startOrOpenConversation(
-      contact.id,
-      contactLeads[0]?.id || ''
-    );
-    if (reopened?.id) {
-      navigate(`/inbox?convId=${reopened.id}`);
-    } else {
-      navigate('/inbox');
-    }
+  const initials = (contact.name || 'WC')
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  const handleSend = (e) => {
+    e.preventDefault();
+    if (!msgText.trim() || !linkedConv) return;
+    sendAgentMessage(linkedConv.id, msgText);
+    setMsgText('');
+  };
+
+  const handleAddNote = (e) => {
+    e.preventDefault();
+    if (!noteText.trim()) return;
+    addContactNote(contact.id, noteText);
+    setNoteText('');
+  };
+
+  const handleOpenInbox = async () => {
+    const conv = await startOrOpenConversation(contact.id, linkedLead?.id || '');
+    navigate(`/inbox?convId=${conv?.id || linkedConv?.id || ''}`);
   };
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1440px] mx-auto space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <Link
-            to="/contacts"
-            className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Contacts Directory</span>
-          </Link>
-          <h1 className="text-xl font-bold text-slate-900 mt-1">{contact.name}</h1>
-          <div className="text-xs text-slate-500 mt-0.5">
-            {contact.phone} · {contact.email} · {contact.company} ({contact.location})
-          </div>
-        </div>
-
-        <button
-          onClick={handleOpenContactChat}
-          className="px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg hover:bg-slate-800 flex items-center gap-1.5 cursor-pointer"
+    <div className="p-4 lg:p-6 space-y-6 max-w-[1280px] mx-auto">
+      <div className="flex items-center justify-between">
+        <Link
+          to="/contacts"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-white/65 px-3.5 py-2 rounded-xl border border-white/80 hover:bg-white shadow-2xs backdrop-blur-md"
         >
-          <MessageSquare className="w-3.5 h-3.5" />
-          <span>{contactConvs[0] ? 'Open WhatsApp Chat' : 'Start / Reopen WhatsApp Chat'}</span>
-        </button>
+          <ChevronLeft className="w-4 h-4" />
+          Back to Contacts Directory
+        </Link>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={handleOpenInbox}
+            className="px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold hover:from-emerald-500 hover:to-teal-400 shadow-sm cursor-pointer"
+          >
+            Open Live WhatsApp Thread
+          </button>
+          {linkedLead && (
+            <Link
+              to={`/leads/${linkedLead.id}`}
+              className="px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
+            >
+              View Sales Lead
+            </Link>
+          )}
+        </div>
       </div>
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        <div className="lg:col-span-2 space-y-6">
-          {/* Edit Contact Attributes */}
-          <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-            <h2 className="text-sm font-bold text-slate-900">Contact Attributes</h2>
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Full Name</label>
-                <input
-                  type="text"
-                  value={contact.name}
-                  onChange={(e) => updateContact(contact.id, { name: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Phone</label>
-                <input
-                  type="text"
-                  value={contact.phone}
-                  onChange={(e) => updateContact(contact.id, { phone: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Email</label>
-                <input
-                  type="email"
-                  value={contact.email}
-                  onChange={(e) => updateContact(contact.id, { email: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Company</label>
-                <input
-                  type="text"
-                  value={contact.company}
-                  onChange={(e) => updateContact(contact.id, { company: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
+      <div className="glass-panel rounded-3xl p-6">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-6 border-b border-white/60">
+          <div className="flex items-center gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-slate-900 text-white font-bold text-xl flex items-center justify-center shadow-md">
+              {initials}
+            </div>
+            <div>
+              <h1 className="text-2xl font-bold text-slate-900">{contact.name}</h1>
+              <p className="text-sm text-slate-600">
+                {contact.company} • {contact.roleTitle || 'Decision Maker'} • {contact.location || 'Kerala'}
+              </p>
+              <div className="flex items-center gap-3 mt-1.5 text-xs font-mono text-slate-600">
+                <span>{contact.phone}</span>
+                <span>•</span>
+                <span>{contact.email}</span>
               </div>
             </div>
+          </div>
 
-            {/* Tags Management */}
-            <div className="pt-3 border-t border-slate-200">
-              <div className="text-xs font-semibold text-slate-700 mb-1.5">
-                Contact Tags: <span className="font-normal text-slate-600">{contact.tags.join(' · ')}</span>
-              </div>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!newTag.trim()) return;
-                  updateContact(contact.id, { tags: [...contact.tags, newTag.trim()] });
-                  setNewTag('');
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  type="text"
-                  value={newTag}
-                  onChange={(e) => setNewTag(e.target.value)}
-                  placeholder="Add segmentation tag..."
-                  className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg"
+          <span className="px-3.5 py-1.5 rounded-full text-xs font-bold bg-emerald-500/15 text-emerald-800 border border-emerald-300 w-fit">
+            WhatsApp Business Opt-In Active
+          </span>
+        </div>
+
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 pt-6">
+          <div className="space-y-4">
+            <div>
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+                Send Direct WhatsApp Message
+              </h3>
+              <form onSubmit={handleSend} className="space-y-3">
+                <textarea
+                  rows={3}
+                  value={msgText}
+                  onChange={(e) => setMsgText(e.target.value)}
+                  placeholder={`Write a WhatsApp message to ${contact.name}...`}
+                  className="w-full p-3.5 text-xs bg-white/80 border border-white/90 rounded-2xl focus:outline-none focus:bg-white focus:border-emerald-500"
                 />
                 <button
                   type="submit"
-                  className="px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg"
+                  className="px-4 py-2.5 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold hover:from-emerald-500 hover:to-teal-400 flex items-center gap-2 shadow-sm cursor-pointer"
                 >
-                  Add Tag
+                  <Send className="w-3.5 h-3.5" />
+                  Dispatch via Meta Cloud API
                 </button>
               </form>
             </div>
-          </div>
 
-          {/* Linked Leads & Conversation History */}
-          <div className="bg-white border border-slate-200 rounded-lg p-6 space-y-4">
-            <h2 className="text-sm font-bold text-slate-900">Linked Leads & WhatsApp History</h2>
-            {contactLeads.length === 0 ? (
-              <div className="p-4 border border-dashed border-slate-200 rounded-lg bg-slate-50 text-xs text-slate-500">
-                No active sales leads linked to this contact.
-              </div>
-            ) : (
-              contactLeads.map((ld) => (
-                <div
-                  key={ld.id}
-                  className="p-4 border border-slate-200 rounded-lg bg-slate-50 flex items-center justify-between"
+            <div className="pt-4 border-t border-white/60">
+              <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-2">
+                Contact Notes
+              </h3>
+              <form onSubmit={handleAddNote} className="flex gap-2 mb-3">
+                <input
+                  type="text"
+                  value={noteText}
+                  onChange={(e) => setNoteText(e.target.value)}
+                  placeholder="Add note to contact..."
+                  className="flex-1 px-3 py-2 text-xs bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+                <button
+                  type="submit"
+                  className="px-3.5 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold"
                 >
-                  <div className="text-xs">
-                    <div className="font-bold text-slate-900">{ld.interestedService}</div>
-                    <div className="text-slate-600 mt-0.5">
-                      Score: <span className="font-mono font-bold">{ld.leadScore}/100</span> ·{' '}
-                      {ld.leadType} · Stage: {ld.leadStatus} · Budget: {ld.budget}
+                  Add
+                </button>
+              </form>
+              <div className="space-y-2">
+                {(contact.notes || []).map((n) => (
+                  <div key={n.id} className="p-3 rounded-xl bg-white/70 border border-white text-xs">
+                    <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+                      <span className="font-bold">{n.authorName}</span>
+                      <span>{n.createdAt}</span>
                     </div>
+                    <p className="text-slate-800">{n.content}</p>
                   </div>
-                  <Link
-                    to={`/leads/${ld.id}`}
-                    className="px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg"
-                  >
-                    Open Lead
-                  </Link>
-                </div>
-              ))
-            )}
-          </div>
-        </div>
-
-        {/* Right: Interaction Stats & Notes */}
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3 text-xs">
-            <h3 className="text-sm font-bold text-slate-900">Interaction Telemetry</h3>
-            <dl className="space-y-2">
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Created Date</dt>
-                <dd className="font-mono text-slate-900 tabular-nums">{contact.createdAt}</dd>
+                ))}
               </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Last Interaction</dt>
-                <dd className="font-mono text-slate-900">{contact.lastInteractionAt}</dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Total Conversations</dt>
-                <dd className="font-mono font-bold text-slate-900 tabular-nums">
-                  {contact.totalConversations}
-                </dd>
-              </div>
-              <div className="flex justify-between">
-                <dt className="text-slate-500">Total WhatsApp Messages</dt>
-                <dd className="font-mono font-bold text-slate-900 tabular-nums">
-                  {contact.totalMessages}
-                </dd>
-              </div>
-            </dl>
+            </div>
           </div>
 
-          <div className="bg-white border border-slate-200 rounded-lg p-5 space-y-3">
-            <h3 className="text-sm font-bold text-slate-900">Contact Notes</h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!noteContent.trim()) return;
-                addContactNote(contact.id, noteContent);
-                setNoteContent('');
-              }}
-              className="space-y-2 text-xs"
-            >
-              <textarea
-                rows={3}
-                value={noteContent}
-                onChange={(e) => setNoteContent(e.target.value)}
-                placeholder="Write a note about this contact..."
-                className="w-full p-2.5 border border-slate-200 rounded-lg"
-              />
-              <button
-                type="submit"
-                className="w-full py-2 bg-slate-900 text-white font-semibold rounded-lg"
-              >
-                Add Note
-              </button>
-            </form>
-            <div className="space-y-2">
-              {(contact.notes || []).map((n) => (
-                <div key={n.id} className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs">
-                  <div className="text-[11px] text-slate-500">
-                    {n.authorName} · {n.createdAt}
+          <div>
+            <h3 className="text-xs font-bold text-slate-500 uppercase tracking-wider mb-3">
+              Recent Conversation Activity
+            </h3>
+            <div className="space-y-2.5 max-h-72 overflow-y-auto glass-scrollbar">
+              {threadMessages.map((m) => (
+                <div key={m.id} className="p-3.5 rounded-2xl bg-white/70 border border-white/90 text-xs">
+                  <div className="flex justify-between text-[10px] font-mono text-slate-500 mb-1">
+                    <span>{m.senderName || m.senderType}</span>
+                    <span>{m.timestamp}</span>
                   </div>
-                  <p className="text-slate-800 mt-1">{n.content}</p>
+                  <p className="text-slate-800">{m.content || m.text}</p>
                 </div>
               ))}
             </div>

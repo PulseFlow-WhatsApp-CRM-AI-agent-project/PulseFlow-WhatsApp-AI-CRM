@@ -1,627 +1,629 @@
-import React, { useState, useMemo, useEffect } from 'react';
+import React, { useState, useMemo } from 'react';
 import { Link, useParams, useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Search,
+  Flame,
   Plus,
-  ArrowUpDown,
-  ArrowLeft,
+  ArrowUpRight,
+  Building2,
+  Phone,
+  Mail,
+  Sparkles,
+  CheckCircle2,
   MessageSquare,
-  CalendarPlus,
-  Trash2,
-  X,
-  TrendingUp,
-  ShieldAlert,
+  ChevronLeft,
   LayoutGrid,
-  List
+  List,
+  Trash2,
+  Send,
+  X,
 } from 'lucide-react';
 import { useCRM } from '../context/CRMContext';
 
+const STAGES = [
+  'NEW',
+  'CONTACTED',
+  'QUALIFIED',
+  'PROPOSAL_SENT',
+  'WON',
+  'LOST',
+];
+
 export const LeadsListPage = () => {
+  const navigate = useNavigate();
+  const [searchParams, setSearchParams] = useSearchParams();
+  const initialStatus = searchParams.get('status') || 'ALL';
+
   const {
-    leads,
-    contacts,
-    conversations,
-    teamMembers,
-    currentUser,
+    leads = [],
+    contacts = [],
+    teamMembers = [],
     addContact,
     addLead,
     updateLead,
-    deleteLead,
-    startOrOpenConversation
+    startOrOpenConversation,
   } = useCRM();
-  const navigate = useNavigate();
-  const [searchParams] = useSearchParams();
 
-  const [viewMode, setViewMode] = useState('TABLE');
-  const [search, setSearch] = useState('');
-  const [typeFilter, setTypeFilter] = useState(() => {
-    const paramType = searchParams.get('type');
-    return paramType ? paramType.toUpperCase() : 'ALL';
+  const [statusFilter, setStatusFilter] = useState(initialStatus);
+  const [stageFilter, setStageFilter] = useState('ALL');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [viewMode, setViewMode] = useState('table'); // 'table' | 'kanban'
+  const [showAddModal, setShowAddModal] = useState(false);
+
+  const [newLead, setNewLead] = useState({
+    name: '',
+    company: '',
+    phone: '+91 ',
+    email: '',
+    leadScore: 85,
+    budget: '₹1,00,000',
+    interestedService: 'Custom Web & Mobile App Development',
+    leadStatus: 'QUALIFIED',
+    timeline: 'Within 30 days',
+    aiSummary: '',
   });
-  const [statusFilter, setStatusFilter] = useState('ALL');
-  const [agentFilter, setAgentFilter] = useState('ALL');
-  const [sortBy, setSortBy] = useState('score');
-  const [page, setPage] = useState(1);
-  const pageSize = 6;
 
-  useEffect(() => {
-    const paramType = searchParams.get('type');
-    if (paramType) {
-      setTypeFilter(paramType.toUpperCase());
-      setPage(1);
-    }
-  }, [searchParams]);
-
-  const [showCreateModal, setShowCreateModal] = useState(false);
-  const [newName, setNewName] = useState('');
-  const [newPhone, setNewPhone] = useState('+91 ');
-  const [newEmail, setNewEmail] = useState('');
-  const [newCompany, setNewCompany] = useState('');
-  const [newService, setNewService] = useState('Web Development (E-Commerce)');
-  const [newBudget, setNewBudget] = useState('₹1,00,000');
-  const [newTimeline, setNewTimeline] = useState('Next month');
-  const [newScore, setNewScore] = useState(85);
-  const [newType, setNewType] = useState('HOT');
-
+  // Enrich leads with contact data so lead.name / lead.company / lead.phone are always defined
   const enrichedLeads = useMemo(() => {
-    return leads
-      .map((lead) => {
-        const contact = contacts.find((c) => c.id === lead.contactId);
-        const agent = teamMembers.find((t) => t.id === lead.assignedAgentId);
-        return { lead, contact, agent };
-      })
-      .filter(({ lead, contact }) => {
-        if (typeFilter !== 'ALL' && lead.leadType !== typeFilter) return false;
-        if (statusFilter !== 'ALL' && lead.leadStatus !== statusFilter) return false;
-        if (agentFilter !== 'ALL' && lead.assignedAgentId !== agentFilter) return false;
+    return leads.map((lead) => {
+      const contact = contacts.find((c) => c.id === lead.contactId) || {};
+      const assignedRep =
+        teamMembers.find((m) => m.id === lead.assignedAgentId) ||
+        teamMembers[0] || { name: 'Binil B' };
+      const name = contact.name || lead.name || 'WhatsApp Prospect';
+      const company = contact.company || lead.company || 'Inbound Business';
+      const phone = contact.phone || lead.phone || '—';
+      const email = contact.email || lead.email || '—';
+      const leadType = lead.leadType || lead.status || 'WARM';
+      const leadScore = lead.leadScore ?? lead.score ?? 70;
+      const leadStatus = lead.leadStatus || lead.stage || 'QUALIFIED';
+      const estimatedValue = Number(lead.estimatedValueInr ?? lead.estimatedValue ?? 50000);
+      const initials = name
+        .split(' ')
+        .map((n) => n[0])
+        .join('')
+        .slice(0, 2)
+        .toUpperCase();
 
-        if (search.trim()) {
-          const q = search.toLowerCase();
-          return (
-            (contact?.name || '').toLowerCase().includes(q) ||
-            (contact?.phone || '').toLowerCase().includes(q) ||
-            (lead.interestedService || '').toLowerCase().includes(q) ||
-            (lead.aiSummary || '').toLowerCase().includes(q) ||
-            (lead.buyingSignals || []).some((s) => s.toLowerCase().includes(q))
-          );
-        }
-        return true;
-      })
-      .sort((a, b) => {
-        if (sortBy === 'score') return b.lead.leadScore - a.lead.leadScore;
-        return b.lead.createdAt.localeCompare(a.lead.createdAt);
-      });
-  }, [leads, contacts, teamMembers, typeFilter, statusFilter, agentFilter, search, sortBy]);
+      return {
+        ...lead,
+        displayName: name,
+        displayCompany: company,
+        displayPhone: phone,
+        displayEmail: email,
+        displayType: leadType,
+        displayScore: leadScore,
+        displayStage: leadStatus,
+        displayValue: estimatedValue,
+        displayBudget: lead.budget || `₹${estimatedValue.toLocaleString('en-IN')}`,
+        displayTimeline: lead.timeline || 'Within 30 days',
+        displayService: lead.interestedService || lead.industry || 'WhatsApp CRM & AI',
+        displayAssignedTo: assignedRep.name,
+        displayTags: lead.requirements || contact.tags || [],
+        initials,
+      };
+    });
+  }, [leads, contacts, teamMembers]);
 
-  const totalPipelineValue = useMemo(
-    () => enrichedLeads.reduce((sum, { lead }) => sum + (lead.estimatedValueInr || 0), 0),
-    [enrichedLeads]
-  );
+  const filteredLeads = useMemo(() => {
+    return enrichedLeads.filter((lead) => {
+      if (statusFilter !== 'ALL' && lead.displayType !== statusFilter) return false;
+      if (stageFilter !== 'ALL' && lead.displayStage !== stageFilter) return false;
+      if (
+        searchQuery &&
+        !lead.displayName.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        !lead.displayCompany.toLowerCase().includes(searchQuery.toLowerCase()) &&
+        !lead.displayPhone.includes(searchQuery) &&
+        !lead.displayService.toLowerCase().includes(searchQuery.toLowerCase())
+      ) {
+        return false;
+      }
+      return true;
+    });
+  }, [enrichedLeads, statusFilter, stageFilter, searchQuery]);
 
-  const totalPages = Math.max(1, Math.ceil(enrichedLeads.length / pageSize));
-  const paginatedLeads = enrichedLeads.slice((page - 1) * pageSize, page * pageSize);
+  const handleStatusTabChange = (status) => {
+    setStatusFilter(status);
+    if (status === 'ALL') {
+      searchParams.delete('status');
+    } else {
+      searchParams.set('status', status);
+    }
+    setSearchParams(searchParams);
+  };
 
   const handleCreateLead = (e) => {
     e.preventDefault();
+    if (!newLead.name.trim()) return;
+
     const createdContact = addContact(
       {
-        name: newName,
-        phone: newPhone,
-        email: newEmail || 'prospect@example.com',
-        company: newCompany || 'Direct Inquiry',
-        location: 'Kochi, Kerala',
+        name: newLead.name.trim(),
+        company: newLead.company.trim() || 'Inbound Business',
+        phone: newLead.phone.trim() || '+91 98470 00000',
+        email: newLead.email.trim() || 'contact@company.in',
+        roleTitle: 'Decision Maker',
+        location: 'Kerala, India',
+        preferredLanguage: 'English',
         source: 'WhatsApp Inbound',
-        tags: [newType, newService]
+        tags: [newLead.interestedService],
       },
-      { createLead: false, createConversation: false }
+      { createLead: false, createConversation: true }
     );
-    addLead({
+
+    const score = Number(newLead.leadScore) || 85;
+    const created = addLead({
       contactId: createdContact.id,
-      leadStatus: 'NEW',
-      leadType: newType,
-      leadScore: newScore,
-      interestedService: newService,
-      budget: newBudget,
-      timeline: newTimeline,
-      requirements: [newService, `Budget: ${newBudget}`],
+      leadStatus: newLead.leadStatus,
+      leadType: score >= 81 ? 'HOT' : score >= 50 ? 'WARM' : 'COLD',
+      leadScore: score,
+      interestedService: newLead.interestedService,
+      budget: newLead.budget,
+      timeline: newLead.timeline,
+      requirements: [newLead.interestedService],
       source: 'WhatsApp Inbound',
-      assignedAgentId: currentUser.id,
-      aiSummary: `New lead created for ${newName} inquiring about ${newService} with budget ${newBudget}.`,
-      purchaseIntent: newScore >= 75
+      assignedAgentId: teamMembers[0]?.id || 'admin-1',
+      aiSummary:
+        newLead.aiSummary ||
+        `Qualified lead interested in ${newLead.interestedService} (${newLead.budget}).`,
+      purchaseIntent: true,
     });
-    setShowCreateModal(false);
-    setNewName('');
-    setNewPhone('+91 ');
+
+    setShowAddModal(false);
+    navigate(`/leads/${created.id}`);
   };
 
-  const handleOpenLeadChat = async (lead) => {
-    const existingConv = conversations.find(
-      (c) =>
-        (lead.conversationId && c.id === lead.conversationId) ||
-        c.leadId === lead.id ||
-        (lead.contactId && c.contactId === lead.contactId)
-    );
-    if (existingConv) {
-      navigate(`/inbox?convId=${existingConv.id}`);
-      return;
-    }
-    const reopened = await startOrOpenConversation(lead.contactId, lead.id);
-    if (reopened?.id) {
-      navigate(`/inbox?convId=${reopened.id}`);
-    } else {
-      navigate('/inbox');
-    }
+  const handleOpenChatForLead = async (lead) => {
+    const conv = await startOrOpenConversation(lead.contactId, lead.id);
+    navigate(`/inbox?convId=${conv?.id || lead.conversationId || 'conv-1'}`);
   };
 
-  const formatLakhs = (val) => `₹${(val / 100000).toFixed(2)}L`;
-
-  const boardStages = [
-    'NEW',
-    'CONTACTED',
-    'QUALIFIED',
-    'PROPOSAL',
-    'NEGOTIATION',
-    'WON'
-  ];
+  const totalPipelineValue = useMemo(() => {
+    return filteredLeads.reduce((sum, l) => sum + (l.displayValue || 0), 0);
+  }, [filteredLeads]);
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1440px] mx-auto space-y-6">
-      {/* Simple, Self-Explanatory Header */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+    <div className="p-4 lg:p-6 space-y-6 max-w-[1600px] mx-auto">
+      {/* Header */}
+      <div className="glass-panel rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-bold text-slate-900">
-            Sales Leads ({enrichedLeads.length}) — Total Value: {formatLakhs(totalPipelineValue)}
-          </h1>
+          <div className="flex flex-wrap items-center gap-2">
+            <h1 className="text-2xl font-bold text-slate-900 tracking-tight">
+              AI-Qualified Sales Leads
+            </h1>
+            <span className="px-3 py-0.5 rounded-full text-xs font-mono font-bold bg-emerald-500/15 text-emerald-800 border border-emerald-400/40">
+              ₹{totalPipelineValue.toLocaleString('en-IN')} Active Pipeline
+            </span>
+          </div>
           <p className="text-sm text-slate-600 mt-0.5">
-            AI automatically scores every WhatsApp customer from 0 to 100 based on their budget and urgency.
+            Leads automatically scored and categorized from live WhatsApp conversations by Gemini AI
           </p>
         </div>
-        <div className="flex flex-wrap items-center gap-2.5">
-          {/* View Mode Toggle: List vs Board */}
-          <div className="flex items-center bg-white border border-slate-200 p-0.5 rounded-lg">
+        <div className="flex items-center gap-2.5">
+          {/* View Mode Toggle */}
+          <div className="inline-flex bg-white/60 border border-white/80 rounded-xl p-1 shadow-2xs backdrop-blur-md">
             <button
-              onClick={() => setViewMode('TABLE')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer ${
-                viewMode === 'TABLE'
-                  ? 'bg-slate-900 text-white'
+              onClick={() => setViewMode('table')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                viewMode === 'table'
+                  ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <List className="w-3.5 h-3.5" />
-              <span>List View</span>
+              Table
             </button>
             <button
-              onClick={() => setViewMode('BOARD')}
-              className={`px-3 py-1.5 text-xs font-semibold rounded-md flex items-center gap-1.5 transition-colors cursor-pointer ${
-                viewMode === 'BOARD'
-                  ? 'bg-slate-900 text-white'
+              onClick={() => setViewMode('kanban')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-all ${
+                viewMode === 'kanban'
+                  ? 'bg-slate-900 text-white shadow-xs'
                   : 'text-slate-600 hover:text-slate-900'
               }`}
             >
               <LayoutGrid className="w-3.5 h-3.5" />
-              <span>Stage Board</span>
+              Pipeline Board
             </button>
           </div>
 
           <button
-            onClick={() => setShowCreateModal(true)}
-            className="px-4 py-2 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 transition-colors flex items-center gap-1.5 cursor-pointer"
+            onClick={() => setShowAddModal(true)}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold hover:from-emerald-500 hover:to-teal-400 transition-all shadow-md shadow-emerald-600/20"
           >
             <Plus className="w-3.5 h-3.5" />
-            <span>Add New Lead</span>
+            Add New Lead
           </button>
         </div>
       </div>
 
-      {/* Filter & Search Bar */}
-      <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-3">
-          {/* Priority Filter Tabs */}
-          <div className="flex flex-wrap gap-1 bg-slate-100 p-1 rounded-lg">
-            {[
-              { id: 'ALL', label: 'All Leads' },
-              { id: 'HOT', label: 'Hot (Ready to Buy)' },
-              { id: 'WARM', label: 'Warm' },
-              { id: 'COLD', label: 'Cold' },
-              { id: 'UNQUALIFIED', label: 'Unqualified' },
-              { id: 'EXISTING_CUSTOMER', label: 'Existing Customer' }
-            ].map((type) => (
-              <button
-                key={type.id}
-                onClick={() => {
-                  setTypeFilter(type.id);
-                  setPage(1);
-                }}
-                className={`px-2.5 py-1.5 text-xs font-medium rounded-md transition-colors whitespace-nowrap cursor-pointer ${
-                  typeFilter === type.id
-                    ? 'bg-white text-slate-900 shadow-2xs font-semibold'
-                    : 'text-slate-600 hover:text-slate-900'
+      {/* Filter Bar */}
+      <div className="glass-panel rounded-3xl p-4 flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+        <div className="flex flex-wrap items-center gap-2">
+          {[
+            { id: 'ALL', label: 'All Leads', count: enrichedLeads.length },
+            { id: 'HOT', label: 'HOT (81-100)', count: enrichedLeads.filter((l) => l.displayType === 'HOT').length },
+            { id: 'WARM', label: 'WARM (31-80)', count: enrichedLeads.filter((l) => l.displayType === 'WARM').length },
+            { id: 'COLD', label: 'COLD (0-30)', count: enrichedLeads.filter((l) => l.displayType === 'COLD').length },
+          ].map((tab) => (
+            <button
+              key={tab.id}
+              onClick={() => handleStatusTabChange(tab.id)}
+              className={`px-3.5 py-1.5 rounded-xl text-xs font-bold transition-all flex items-center gap-2 ${
+                statusFilter === tab.id
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'bg-white/60 text-slate-700 hover:bg-white border border-white/70'
+              }`}
+            >
+              {tab.id === 'HOT' && <Flame className="w-3.5 h-3.5 text-rose-500" />}
+              {tab.label}
+              <span
+                className={`px-1.5 py-0.2 rounded-full text-[10px] font-mono ${
+                  statusFilter === tab.id ? 'bg-white/20 text-white' : 'bg-slate-200/80 text-slate-700'
                 }`}
               >
-                {type.label}
-              </button>
-            ))}
-          </div>
-
-          <div className="flex flex-wrap items-center gap-2">
-            <select
-              value={statusFilter}
-              onChange={(e) => {
-                setStatusFilter(e.target.value);
-                setPage(1);
-              }}
-              className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg bg-white"
-            >
-              <option value="ALL">All Stages</option>
-              <option value="NEW">NEW</option>
-              <option value="CONTACTED">CONTACTED</option>
-              <option value="QUALIFIED">QUALIFIED</option>
-              <option value="PROPOSAL">PROPOSAL</option>
-              <option value="NEGOTIATION">NEGOTIATION</option>
-              <option value="WON">WON</option>
-              <option value="LOST">LOST</option>
-            </select>
-
-            <select
-              value={agentFilter}
-              onChange={(e) => {
-                setAgentFilter(e.target.value);
-                setPage(1);
-              }}
-              className="px-3 py-1.5 text-xs border border-slate-200 rounded-lg bg-white"
-            >
-              <option value="ALL">All Team Members</option>
-              {teamMembers.map((tm) => (
-                <option key={tm.id} value={tm.id}>
-                  {tm.name}
-                </option>
-              ))}
-            </select>
-
-            <button
-              onClick={() => setSortBy(sortBy === 'score' ? 'created' : 'score')}
-              className="px-3 py-1.5 text-xs font-medium border border-slate-200 rounded-lg hover:bg-slate-50 flex items-center gap-1.5 cursor-pointer"
-            >
-              <ArrowUpDown className="w-3.5 h-3.5" />
-              <span>Sort by: {sortBy === 'score' ? 'Highest Score' : 'Newest'}</span>
+                {tab.count}
+              </span>
             </button>
-
-            <div className="relative w-full sm:w-60">
-              <Search className="w-3.5 h-3.5 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
-              <input
-                type="text"
-                value={search}
-                onChange={(e) => {
-                  setSearch(e.target.value);
-                  setPage(1);
-                }}
-                placeholder="Search customer or service..."
-                className="w-full pl-8 pr-3 py-1.5 text-xs border border-slate-200 rounded-lg focus:outline-none focus:border-slate-900"
-              />
-            </div>
-          </div>
+          ))}
         </div>
 
-        {/* LIST VIEW */}
-        {viewMode === 'TABLE' ? (
-          <>
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="border-b border-slate-200 text-slate-500">
-                    <th className="py-2.5 px-3 font-semibold">Customer</th>
-                    <th className="py-2.5 px-3 font-semibold">Priority & Score</th>
-                    <th className="py-2.5 px-3 font-semibold">What They Want & Next Step</th>
-                    <th className="py-2.5 px-3 font-semibold">Budget & Timeline</th>
-                    <th className="py-2.5 px-3 font-semibold">Deal Stage</th>
-                    <th className="py-2.5 px-3 font-semibold">Handled By</th>
-                    <th className="py-2.5 px-3 font-semibold text-right">Actions</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {paginatedLeads.map(({ lead, contact }) => (
-                    <tr key={lead.id} className="hover:bg-slate-50/80">
-                      <td className="py-3.5 px-3">
+        <div className="flex flex-wrap items-center gap-3">
+          <select
+            value={stageFilter}
+            onChange={(e) => setStageFilter(e.target.value)}
+            className="px-3 py-2 text-xs font-semibold bg-white/75 border border-white/80 rounded-xl text-slate-700 focus:outline-none focus:border-emerald-500 backdrop-blur-md"
+          >
+            <option value="ALL">All Pipeline Stages</option>
+            {STAGES.map((st) => (
+              <option key={st} value={st}>
+                {st.replace('_', ' ')}
+              </option>
+            ))}
+          </select>
+
+          <div className="relative w-full sm:w-72">
+            <Search className="w-4 h-4 text-slate-400 absolute left-3.5 top-1/2 -translate-y-1/2" />
+            <input
+              type="text"
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search lead, company, or WhatsApp..."
+              className="w-full pl-9 pr-4 py-2 text-xs bg-white/75 border border-white/80 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500 backdrop-blur-md"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Table View vs Kanban View */}
+      {viewMode === 'table' ? (
+        <div className="glass-panel rounded-3xl overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse">
+              <thead>
+                <tr className="border-b border-white/60 bg-white/35 text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                  <th className="py-3.5 px-5">Lead & Company</th>
+                  <th className="py-3.5 px-4">AI Score & Status</th>
+                  <th className="py-3.5 px-4">Pipeline Stage & Service</th>
+                  <th className="py-3.5 px-4">Budget & Timeline</th>
+                  <th className="py-3.5 px-4">Assigned Rep</th>
+                  <th className="py-3.5 px-5 text-right">Actions</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-white/50 text-sm">
+                {filteredLeads.map((lead) => (
+                  <tr key={lead.id} className="hover:bg-white/45 transition-colors group">
+                    <td className="py-4 px-5">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 rounded-2xl bg-slate-900 text-white font-bold text-xs flex items-center justify-center shrink-0 shadow-xs">
+                          {lead.initials}
+                        </div>
+                        <div>
+                          <Link
+                            to={`/leads/${lead.id}`}
+                            className="font-bold text-slate-900 hover:text-emerald-700 transition-colors flex items-center gap-1"
+                          >
+                            {lead.displayName}
+                            <ArrowUpRight className="w-3.5 h-3.5 opacity-0 group-hover:opacity-100 transition-opacity text-emerald-600" />
+                          </Link>
+                          <div className="flex items-center gap-2 text-xs text-slate-600 mt-0.5">
+                            <span className="flex items-center gap-1">
+                              <Building2 className="w-3 h-3 text-slate-400" />
+                              {lead.displayCompany}
+                            </span>
+                            <span>•</span>
+                            <span className="font-mono text-[11px]">{lead.displayPhone}</span>
+                          </div>
+                        </div>
+                      </div>
+                    </td>
+
+                    <td className="py-4 px-4">
+                      <div className="flex items-center gap-2.5">
+                        <select
+                          value={lead.displayType}
+                          onChange={(e) => {
+                            const nextType = e.target.value;
+                            const nextScore =
+                              nextType === 'HOT' ? 88 : nextType === 'WARM' ? 68 : 25;
+                            updateLead(lead.id, { leadType: nextType, leadScore: nextScore });
+                          }}
+                          className={`px-2.5 py-1 rounded-full text-xs font-bold font-mono border cursor-pointer focus:outline-none ${
+                            lead.displayType === 'HOT'
+                              ? 'bg-rose-500/15 text-rose-800 border-rose-300'
+                              : lead.displayType === 'WARM'
+                              ? 'bg-amber-500/15 text-amber-800 border-amber-300'
+                              : 'bg-white/70 text-slate-700 border-white/80'
+                          }`}
+                        >
+                          <option value="HOT">HOT • {lead.displayScore}</option>
+                          <option value="WARM">WARM • {lead.displayScore}</option>
+                          <option value="COLD">COLD • {lead.displayScore}</option>
+                        </select>
+                      </div>
+                      <p className="text-[11px] text-slate-500 mt-1">
+                        Intent: <span className="font-semibold text-slate-700">{lead.purchaseIntent ? 'High Intent' : 'Evaluating'}</span>
+                      </p>
+                    </td>
+
+                    <td className="py-4 px-4">
+                      <select
+                        value={lead.displayStage}
+                        onChange={(e) => updateLead(lead.id, { leadStatus: e.target.value })}
+                        className="px-2.5 py-1.5 rounded-xl bg-white/75 border border-white/80 text-xs font-semibold text-slate-800 hover:bg-white focus:outline-none focus:border-emerald-500"
+                      >
+                        {STAGES.map((st) => (
+                          <option key={st} value={st}>
+                            {st.replace('_', ' ')}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="text-[11px] text-slate-600 mt-1 truncate max-w-[220px]">
+                        {lead.displayService}
+                      </p>
+                    </td>
+
+                    <td className="py-4 px-4">
+                      <p className="text-sm font-bold font-mono text-slate-900">
+                        {lead.displayBudget}
+                      </p>
+                      <p className="text-xs text-slate-500 mt-0.5">Timeline: {lead.displayTimeline}</p>
+                    </td>
+
+                    <td className="py-4 px-4">
+                      <span className="text-xs font-medium text-slate-800">{lead.displayAssignedTo}</span>
+                      <p className="text-[11px] text-slate-500 mt-0.5">{lead.updatedAt || 'Today'}</p>
+                    </td>
+
+                    <td className="py-4 px-5 text-right">
+                      <div className="inline-flex items-center gap-1.5">
+                        <button
+                          onClick={() => handleOpenChatForLead(lead)}
+                          className="p-2 rounded-xl border border-white/80 bg-white/65 text-slate-600 hover:text-emerald-700 hover:bg-white transition-colors cursor-pointer"
+                          title="Message on WhatsApp"
+                        >
+                          <MessageSquare className="w-3.5 h-3.5" />
+                        </button>
                         <Link
                           to={`/leads/${lead.id}`}
-                          className="font-bold text-slate-900 hover:text-emerald-700"
+                          className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors"
                         >
-                          {contact?.name}
+                          Profile
                         </Link>
-                        <div className="text-[11px] font-mono text-slate-500 tabular-nums">
-                          {contact?.phone} · {contact?.company}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <div className="font-mono tabular-nums">
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      ) : (
+        /* Kanban Board View */
+        <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-4 overflow-x-auto pb-4">
+          {STAGES.map((stage) => {
+            const stageLeads = filteredLeads.filter((l) => l.displayStage === stage);
+            const stageValue = stageLeads.reduce((s, l) => s + (l.displayValue || 0), 0);
+            return (
+              <div
+                key={stage}
+                className="glass-panel rounded-3xl p-3.5 flex flex-col min-h-[520px]"
+              >
+                <div className="flex items-center justify-between mb-2 px-1">
+                  <h3 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                    {stage.replace('_', ' ')}
+                  </h3>
+                  <span className="px-2 py-0.5 rounded-full text-[11px] font-mono font-bold bg-white/80 border border-white text-slate-700">
+                    {stageLeads.length}
+                  </span>
+                </div>
+                <p className="text-[11px] font-mono font-semibold text-slate-600 mb-3 px-1">
+                  ₹{stageValue.toLocaleString('en-IN')}
+                </p>
+
+                <div className="space-y-3 flex-1">
+                  {stageLeads.map((lead) => (
+                    <div
+                      key={lead.id}
+                      className="p-3.5 rounded-2xl bg-white/75 border border-white/90 shadow-xs hover:bg-white transition-all flex flex-col justify-between gap-2.5"
+                    >
+                      <div>
+                        <div className="flex items-center justify-between gap-1">
                           <span
-                            className={`font-bold ${
-                              lead.leadScore >= 81
-                                ? 'text-emerald-700'
-                                : lead.leadScore >= 61
-                                ? 'text-indigo-700'
-                                : 'text-amber-700'
+                            className={`px-2 py-0.5 rounded-full text-[10px] font-bold font-mono ${
+                              lead.displayType === 'HOT'
+                                ? 'bg-rose-500/15 text-rose-800'
+                                : lead.displayType === 'WARM'
+                                ? 'bg-amber-500/15 text-amber-800'
+                                : 'bg-slate-200/70 text-slate-700'
                             }`}
                           >
-                            {lead.leadType} ({lead.leadScore}/100)
+                            {lead.displayType} • {lead.displayScore}
+                          </span>
+                          <span className="text-xs font-bold font-mono text-slate-900">
+                            {lead.displayBudget}
                           </span>
                         </div>
-                        <div className="text-[11px] text-slate-500 mt-0.5">
-                          {lead.customerSentiment}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-3 text-slate-800 max-w-sm">
-                        <div className="font-semibold text-slate-900">{lead.interestedService}</div>
-                        <div className="text-[11px] text-emerald-800 truncate mt-0.5">
-                          Next: {lead.recommendedNextAction}
-                        </div>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <div className="font-mono font-bold text-slate-900 tabular-nums">
-                          {lead.budget}
-                        </div>
-                        <div className="text-[11px] text-slate-500">{lead.timeline}</div>
-                      </td>
-                      <td className="py-3.5 px-3">
-                        <select
-                          value={lead.leadStatus}
-                          onChange={(e) =>
-                            updateLead(lead.id, { leadStatus: e.target.value })
-                          }
-                          className="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white font-semibold"
+                        <Link
+                          to={`/leads/${lead.id}`}
+                          className="block text-sm font-bold text-slate-900 hover:text-emerald-700 mt-2"
                         >
-                          <option value="NEW">NEW</option>
-                          <option value="CONTACTED">CONTACTED</option>
-                          <option value="QUALIFIED">QUALIFIED</option>
-                          <option value="PROPOSAL">PROPOSAL</option>
-                          <option value="NEGOTIATION">NEGOTIATION</option>
-                          <option value="WON">WON</option>
-                          <option value="LOST">LOST</option>
-                        </select>
-                      </td>
-                      <td className="py-3.5 px-3">
+                          {lead.displayName}
+                        </Link>
+                        <p className="text-xs text-slate-600">{lead.displayCompany}</p>
+                      </div>
+
+                      <div className="pt-2 border-t border-slate-200/60 flex items-center justify-between">
                         <select
-                          value={lead.assignedAgentId}
-                          onChange={(e) =>
-                            updateLead(lead.id, { assignedAgentId: e.target.value })
-                          }
-                          className="px-2 py-1 text-xs border border-slate-200 rounded-md bg-white"
+                          value={lead.displayStage}
+                          onChange={(e) => updateLead(lead.id, { leadStatus: e.target.value })}
+                          className="text-[10px] font-semibold bg-white/80 border border-slate-200 rounded-lg px-1.5 py-1 text-slate-700"
                         >
-                          {teamMembers.map((tm) => (
-                            <option key={tm.id} value={tm.id}>
-                              {tm.name}
+                          {STAGES.map((st) => (
+                            <option key={st} value={st}>
+                              {st.replace('_', ' ')}
                             </option>
                           ))}
                         </select>
-                      </td>
-                      <td className="py-3.5 px-3 text-right whitespace-nowrap space-x-1.5">
                         <Link
                           to={`/leads/${lead.id}`}
-                          className="px-2.5 py-1.5 text-xs font-semibold bg-slate-900 text-white rounded-md hover:bg-slate-800"
+                          className="text-[11px] font-semibold text-emerald-700 hover:text-emerald-800"
                         >
-                          View Details
+                          Open →
                         </Link>
-                        <button
-                          onClick={() => handleOpenLeadChat(lead)}
-                          className="px-2.5 py-1.5 text-xs font-medium border border-slate-200 rounded-md hover:bg-slate-100 text-slate-700 cursor-pointer"
-                        >
-                          Open Chat
-                        </button>
-                        {currentUser.role !== 'AGENT' && (
-                          <button
-                            onClick={() => deleteLead(lead.id)}
-                            className="p-1 text-slate-400 hover:text-rose-600 cursor-pointer"
-                            title="Delete Lead"
-                          >
-                            <Trash2 className="w-3.5 h-3.5 inline" />
-                          </button>
-                        )}
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-
-            {/* Pagination Controls */}
-            <div className="flex items-center justify-between pt-3 border-t border-slate-200 text-xs text-slate-600">
-              <div>
-                Page <span className="font-mono font-semibold">{page}</span> of{' '}
-                <span className="font-mono font-semibold">{totalPages}</span> ({enrichedLeads.length}{' '}
-                leads)
-              </div>
-              <div className="flex items-center gap-2">
-                <button
-                  disabled={page <= 1}
-                  onClick={() => setPage((p) => Math.max(1, p - 1))}
-                  className="px-3 py-1 border border-slate-200 rounded-md disabled:opacity-40 hover:bg-slate-50 cursor-pointer"
-                >
-                  Previous
-                </button>
-                <button
-                  disabled={page >= totalPages}
-                  onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
-                  className="px-3 py-1 border border-slate-200 rounded-md disabled:opacity-40 hover:bg-slate-50 cursor-pointer"
-                >
-                  Next
-                </button>
-              </div>
-            </div>
-          </>
-        ) : (
-          /* STAGE BOARD VIEW */
-          <div className="grid grid-cols-1 md:grid-cols-3 xl:grid-cols-6 gap-3 pt-2">
-            {boardStages.map((stage) => {
-              const stageItems = enrichedLeads.filter(({ lead }) => lead.leadStatus === stage);
-              const stageSum = stageItems.reduce(
-                (s, { lead }) => s + (lead.estimatedValueInr || 0),
-                0
-              );
-              return (
-                <div
-                  key={stage}
-                  className="bg-slate-50 border border-slate-200 rounded-xl p-3 flex flex-col gap-2.5 min-h-[420px]"
-                >
-                  <div className="flex items-center justify-between pb-2 border-b border-slate-200">
-                    <span className="text-xs font-bold text-slate-900">
-                      {stage} ({stageItems.length})
-                    </span>
-                    <span className="text-[11px] font-mono font-semibold text-emerald-700 tabular-nums">
-                      {formatLakhs(stageSum)}
-                    </span>
-                  </div>
-
-                  <div className="space-y-2.5 flex-1">
-                    {stageItems.map(({ lead, contact }) => (
-                      <div
-                        key={lead.id}
-                        className="bg-white border border-slate-200 rounded-lg p-3 space-y-2 hover:border-slate-400 transition-colors"
-                      >
-                        <div className="flex items-start justify-between gap-1">
-                          <Link
-                            to={`/leads/${lead.id}`}
-                            className="text-xs font-bold text-slate-900 hover:text-emerald-700"
-                          >
-                            {contact?.name}
-                          </Link>
-                          <span className="text-[11px] font-mono font-bold text-emerald-700 tabular-nums">
-                            {lead.leadScore}/100
-                          </span>
-                        </div>
-                        <div className="text-[11px] text-slate-600 font-medium">
-                          {lead.interestedService}
-                        </div>
-                        <div className="text-[11px] font-mono font-semibold text-slate-900">
-                          {lead.budget}
-                        </div>
                       </div>
-                    ))}
-                  </div>
+                    </div>
+                  ))}
                 </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
 
-      {/* Create Lead Modal */}
-      {showCreateModal && (
-        <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4">
-          <div className="bg-white border border-slate-200 rounded-xl max-w-md w-full p-6 space-y-4 shadow-xl">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
-              <h3 className="text-sm font-bold text-slate-900">Add New Sales Lead</h3>
+      {/* Add Lead Modal */}
+      {showAddModal && (
+        <div className="fixed inset-0 z-50 bg-slate-900/40 backdrop-blur-md flex items-center justify-center p-4">
+          <div className="glass-panel-strong rounded-3xl max-w-lg w-full p-6 shadow-2xl border border-white/80">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-base font-bold text-slate-900">Add New Sales Lead</h3>
               <button
-                onClick={() => setShowCreateModal(false)}
-                className="text-slate-400 hover:text-slate-700 cursor-pointer"
+                onClick={() => setShowAddModal(false)}
+                className="p-1.5 rounded-xl text-slate-400 hover:text-slate-700 hover:bg-white/60"
               >
                 <X className="w-4 h-4" />
               </button>
             </div>
-            <form onSubmit={handleCreateLead} className="space-y-3 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Customer Name</label>
-                <input
-                  type="text"
-                  required
-                  value={newName}
-                  onChange={(e) => setNewName(e.target.value)}
-                  placeholder="e.g., Siddharth Menon"
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
-              </div>
+            <form onSubmit={handleCreateLead} className="space-y-3.5">
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">WhatsApp Phone</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Full Name *</label>
                   <input
                     type="text"
                     required
-                    value={newPhone}
-                    onChange={(e) => setNewPhone(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
+                    value={newLead.name}
+                    onChange={(e) => setNewLead({ ...newLead, name: e.target.value })}
+                    placeholder="Neha Singhania"
+                    className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Company</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Company *</label>
                   <input
                     type="text"
-                    value={newCompany}
-                    onChange={(e) => setNewCompany(e.target.value)}
-                    placeholder="Organization"
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                    required
+                    value={newLead.company}
+                    onChange={(e) => setNewLead({ ...newLead, company: e.target.value })}
+                    placeholder="Luminary FinTech"
+                    className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Service Needed</label>
-                <input
-                  type="text"
-                  required
-                  value={newService}
-                  onChange={(e) => setNewService(e.target.value)}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
-              </div>
+
               <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Budget</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">WhatsApp Phone *</label>
                   <input
                     type="text"
-                    value={newBudget}
-                    onChange={(e) => setNewBudget(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
+                    required
+                    value={newLead.phone}
+                    onChange={(e) => setNewLead({ ...newLead, phone: e.target.value })}
+                    placeholder="+91 98470 44901"
+                    className="w-full px-3.5 py-2 text-sm font-mono bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Timeline</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Work Email</label>
                   <input
-                    type="text"
-                    value={newTimeline}
-                    onChange={(e) => setNewTimeline(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg"
+                    type="email"
+                    value={newLead.email}
+                    onChange={(e) => setNewLead({ ...newLead, email: e.target.value })}
+                    placeholder="neha@luminary.io"
+                    className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
               </div>
-              <div className="grid grid-cols-2 gap-3">
+
+              <div className="grid grid-cols-3 gap-3">
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">
-                    Lead Score (0–100)
-                  </label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">AI Lead Score</label>
                   <input
                     type="number"
-                    min={0}
-                    max={100}
-                    value={newScore}
-                    onChange={(e) => setNewScore(Number(e.target.value))}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
+                    min="1"
+                    max="100"
+                    value={newLead.leadScore}
+                    onChange={(e) => setNewLead({ ...newLead, leadScore: Number(e.target.value) })}
+                    className="w-full px-3.5 py-2 text-sm font-mono bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   />
                 </div>
                 <div>
-                  <label className="block font-semibold text-slate-700 mb-1">Priority</label>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Budget</label>
+                  <input
+                    type="text"
+                    value={newLead.budget}
+                    onChange={(e) => setNewLead({ ...newLead, budget: e.target.value })}
+                    className="w-full px-3.5 py-2 text-sm font-mono bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">Pipeline Stage</label>
                   <select
-                    value={newType}
-                    onChange={(e) => setNewType(e.target.value)}
-                    className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
+                    value={newLead.leadStatus}
+                    onChange={(e) => setNewLead({ ...newLead, leadStatus: e.target.value })}
+                    className="w-full px-3 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
                   >
-                    <option value="HOT">HOT (Ready)</option>
-                    <option value="WARM">WARM</option>
-                    <option value="COLD">COLD</option>
-                    <option value="UNQUALIFIED">UNQUALIFIED</option>
+                    {STAGES.map((st) => (
+                      <option key={st} value={st}>
+                        {st.replace('_', ' ')}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>
-              <div className="pt-2 flex justify-end gap-2">
+
+              <div>
+                <label className="block text-xs font-semibold text-slate-700 mb-1">AI Qualification Notes</label>
+                <textarea
+                  rows={2}
+                  value={newLead.aiSummary}
+                  onChange={(e) => setNewLead({ ...newLead, aiSummary: e.target.value })}
+                  placeholder="Summary of WhatsApp inquiry, pain points, and timeline..."
+                  className="w-full px-3.5 py-2 text-sm bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
                 <button
                   type="button"
-                  onClick={() => setShowCreateModal(false)}
-                  className="px-4 py-2 border border-slate-200 rounded-lg text-slate-700 cursor-pointer"
+                  onClick={() => setShowAddModal(false)}
+                  className="px-4 py-2 rounded-xl border border-white/80 bg-white/60 text-xs font-semibold text-slate-600 hover:bg-white"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-lg cursor-pointer"
+                  className="px-4 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 shadow-sm"
                 >
-                  Save Lead
+                  Create Qualified Lead
                 </button>
               </div>
             </form>
@@ -636,462 +638,470 @@ export const LeadDetailsPage = () => {
   const { id } = useParams();
   const navigate = useNavigate();
   const {
-    leads,
-    contacts,
-    conversations,
-    followUps,
-    messagesByConv,
-    currentUser,
+    leads = [],
+    contacts = [],
+    conversations = [],
+    messagesByConv = {},
+    followUps = [],
+    teamMembers = [],
     updateLead,
     deleteLead,
     addLeadNote,
     addFollowUp,
-    startOrOpenConversation
+    updateFollowUpStatus,
+    sendAgentMessage,
+    startOrOpenConversation,
   } = useCRM();
 
-  const lead = leads.find((l) => l.id === id);
-  const contact = contacts.find((c) => c.id === lead?.contactId);
-  const linkedConv = conversations.find(
-    (c) =>
-      (lead?.conversationId && c.id === lead.conversationId) ||
-      (lead && c.leadId === lead.id) ||
-      (lead?.contactId && c.contactId === lead.contactId)
-  );
+  const lead = leads.find((l) => l.id === id) || leads[0];
+  const contact = contacts.find((c) => c.id === lead?.contactId) || {};
+  const linkedConversation =
+    conversations.find((c) => c.id === lead?.conversationId || c.leadId === lead?.id) ||
+    conversations[0];
+  const threadMessages = linkedConversation ? messagesByConv[linkedConversation.id] || [] : [];
   const leadFollowUps = followUps.filter((f) => f.leadId === lead?.id);
-  const convMessages = linkedConv ? messagesByConv[linkedConv.id] || [] : [];
+  const assignedRep =
+    teamMembers.find((m) => m.id === lead?.assignedAgentId) ||
+    teamMembers[0] || { name: 'Binil B' };
 
-  const [noteText, setNoteText] = useState('');
-  const [reqInput, setReqInput] = useState('');
-  const [fuDate, setFuDate] = useState('2026-09-29');
-  const [fuTime, setFuTime] = useState('14:00');
-  const [fuNote, setFuNote] = useState('');
+  const [noteInput, setNoteInput] = useState('');
+  const [newReqInput, setNewReqInput] = useState('');
+  const [quickWhatsAppMsg, setQuickWhatsAppMsg] = useState('');
+  const [followUpTaskInput, setFollowUpTaskInput] = useState('');
 
   if (!lead) {
     return (
-      <div className="p-8 max-w-lg mx-auto my-12 bg-white border border-slate-200 rounded-xl space-y-3 text-center">
-        <div className="text-sm font-bold text-slate-900">Lead Record Not Found</div>
-        <p className="text-xs text-slate-500">
-          This sales lead may have been deleted from the pipeline.
-        </p>
-        <Link
-          to="/leads"
-          className="inline-block px-4 py-2 bg-slate-900 text-white text-xs font-semibold rounded-lg"
-        >
-          Back to Sales Leads
-        </Link>
+      <div className="p-6 max-w-xl mx-auto">
+        <div className="glass-panel rounded-3xl p-6 text-center space-y-3">
+          <p className="text-sm font-bold text-slate-800">Lead record not found</p>
+          <Link
+            to="/leads"
+            className="inline-flex items-center gap-1.5 px-4 py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold"
+          >
+            <ChevronLeft className="w-4 h-4" />
+            Back to Leads
+          </Link>
+        </div>
       </div>
     );
   }
 
-  const handleOpenChat = async () => {
-    if (linkedConv) {
-      navigate(`/inbox?convId=${linkedConv.id}`);
-      return;
-    }
-    const reopened = await startOrOpenConversation(lead.contactId, lead.id);
-    if (reopened?.id) {
-      navigate(`/inbox?convId=${reopened.id}`);
-    } else {
-      navigate('/inbox');
-    }
+  const displayName = contact.name || lead.name || 'WhatsApp Prospect';
+  const displayCompany = contact.company || lead.company || 'Inbound Business';
+  const displayPhone = contact.phone || lead.phone || '—';
+  const displayEmail = contact.email || lead.email || '—';
+  const displayType = lead.leadType || lead.status || 'WARM';
+  const displayScore = lead.leadScore ?? lead.score ?? 75;
+  const displayStage = lead.leadStatus || lead.stage || 'QUALIFIED';
+  const initials = displayName
+    .split(' ')
+    .map((n) => n[0])
+    .join('')
+    .slice(0, 2)
+    .toUpperCase();
+
+  const handleAddNote = (e) => {
+    e.preventDefault();
+    if (!noteInput.trim()) return;
+    addLeadNote(lead.id, noteInput.trim());
+    setNoteInput('');
   };
 
-  const handleDeleteCurrentLead = () => {
-    deleteLead(lead.id);
-    navigate('/leads');
+  const handleAddRequirement = (e) => {
+    e.preventDefault();
+    if (!newReqInput.trim()) return;
+    const updatedReqs = [...(lead.requirements || []), newReqInput.trim()];
+    updateLead(lead.id, { requirements: updatedReqs });
+    setNewReqInput('');
   };
 
-  const sb = lead.scoreBreakdown;
+  const handleSendQuickWhatsApp = (e) => {
+    e.preventDefault();
+    if (!quickWhatsAppMsg.trim() || !linkedConversation) return;
+    sendAgentMessage(linkedConversation.id, quickWhatsAppMsg);
+    setQuickWhatsAppMsg('');
+  };
+
+  const handleAddFollowUp = (e) => {
+    e.preventDefault();
+    if (!followUpTaskInput.trim()) return;
+    addFollowUp({
+      leadId: lead.id,
+      contactId: lead.contactId,
+      assignedUserId: lead.assignedAgentId || 'admin-1',
+      date: new Date().toISOString().slice(0, 10),
+      time: '11:00',
+      note: followUpTaskInput.trim(),
+      status: 'PENDING',
+    });
+    setFollowUpTaskInput('');
+  };
+
+  const handleOpenInbox = async () => {
+    const conv = await startOrOpenConversation(lead.contactId, lead.id);
+    navigate(`/inbox?convId=${conv?.id || linkedConversation?.id || ''}`);
+  };
 
   return (
-    <div className="p-6 lg:p-8 max-w-[1440px] mx-auto space-y-6">
+    <div className="p-4 lg:p-6 space-y-6 max-w-[1440px] mx-auto">
+      {/* Top Breadcrumb & Actions */}
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
-        <div>
-          <Link
-            to="/leads"
-            className="text-xs text-slate-500 hover:text-slate-900 flex items-center gap-1"
-          >
-            <ArrowLeft className="w-3.5 h-3.5" />
-            <span>Back to Sales Leads</span>
-          </Link>
-          <h1 className="text-2xl font-bold text-slate-900 mt-1">
-            {contact?.name} — {lead.interestedService}
-          </h1>
-          <div className="text-xs text-slate-500 mt-0.5 flex flex-wrap items-center gap-2">
-            <span className="font-mono font-semibold text-slate-800">{contact?.phone}</span>
-            <span aria-hidden="true">·</span>
-            <span>{contact?.company}</span>
-            <span aria-hidden="true">·</span>
-            <span className="text-emerald-700 font-semibold">
-              Best time to call: {contact?.bestTimeToContact || '10:00 AM – 6:00 PM'}
-            </span>
-          </div>
-        </div>
+        <Link
+          to="/leads"
+          className="inline-flex items-center gap-1.5 text-xs font-semibold text-slate-800 bg-white/65 px-3.5 py-2 rounded-xl border border-white/80 hover:bg-white shadow-2xs backdrop-blur-md w-fit"
+        >
+          <ChevronLeft className="w-4 h-4" />
+          Back to All Leads
+        </Link>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
+          <select
+            value={displayStage}
+            onChange={(e) => updateLead(lead.id, { leadStatus: e.target.value })}
+            className="px-3.5 py-2 rounded-xl border border-white/80 bg-white/75 text-xs font-bold text-slate-800 focus:outline-none focus:border-emerald-500 backdrop-blur-md"
+          >
+            {STAGES.map((st) => (
+              <option key={st} value={st}>
+                Stage: {st.replace('_', ' ')}
+              </option>
+            ))}
+          </select>
+
           <button
-            onClick={handleOpenChat}
-            className="px-4 py-2 bg-emerald-600 text-white text-xs font-semibold rounded-lg hover:bg-emerald-700 flex items-center gap-1.5 cursor-pointer"
+            onClick={handleOpenInbox}
+            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl bg-gradient-to-r from-emerald-600 to-teal-500 text-white text-xs font-semibold hover:from-emerald-500 hover:to-teal-400 transition-all shadow-md shadow-emerald-600/20 cursor-pointer"
           >
             <MessageSquare className="w-3.5 h-3.5" />
-            <span>{linkedConv ? 'Open WhatsApp Chat' : 'Reopen WhatsApp Chat'}</span>
+            Open WhatsApp Thread
           </button>
-          {currentUser?.role !== 'AGENT' && (
-            <button
-              onClick={handleDeleteCurrentLead}
-              className="px-3.5 py-2 border border-rose-200 bg-rose-50/80 hover:bg-rose-100 text-rose-700 text-xs font-semibold rounded-lg flex items-center gap-1.5 cursor-pointer"
-              title="Delete only this sales lead (preserves WhatsApp conversation and contact)"
-            >
-              <Trash2 className="w-3.5 h-3.5 text-rose-600" />
-              <span>Delete Lead</span>
-            </button>
-          )}
+
+          <button
+            onClick={() => {
+              deleteLead(lead.id);
+              navigate('/leads');
+            }}
+            className="p-2 rounded-xl border border-white/80 bg-white/70 text-slate-500 hover:text-rose-600 hover:bg-rose-50 transition-colors backdrop-blur-md cursor-pointer"
+            title="Delete Lead"
+          >
+            <Trash2 className="w-4 h-4" />
+          </button>
         </div>
       </div>
 
-      {/* Clear Next Step Box */}
-      <div className="bg-slate-900 text-white rounded-xl p-5 flex flex-col md:flex-row md:items-center justify-between gap-4">
-        <div className="space-y-1">
-          <div className="text-xs font-bold text-emerald-400">
-            Suggested Next Step ({lead.customerSentiment}):
-          </div>
-          <p className="text-sm font-semibold text-white">{lead.recommendedNextAction}</p>
-        </div>
-        <button
-          onClick={handleOpenChat}
-          className="px-4 py-2 bg-white text-slate-900 text-xs font-bold rounded-lg hover:bg-emerald-50 shrink-0 cursor-pointer"
-        >
-          Reply on WhatsApp →
-        </button>
-      </div>
-
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left 2 Columns: Summary, Why they are interested, and Chat History */}
-        <div className="lg:col-span-2 space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-5">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-4">
-              <div>
-                <h2 className="text-base font-bold text-slate-900">
-                  What AI Knows About {contact?.name}
-                </h2>
-                <p className="text-xs text-slate-500">
-                  Last active on WhatsApp: {lead.lastInteractionAt}
-                </p>
+      {/* Main Profile Header Card */}
+      <div className="glass-panel rounded-3xl p-6">
+        <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-6">
+          <div className="flex items-start gap-4">
+            <div className="w-16 h-16 rounded-2xl bg-slate-900 text-white font-bold text-xl flex items-center justify-center shrink-0 shadow-md">
+              {initials}
+            </div>
+            <div>
+              <div className="flex flex-wrap items-center gap-2.5">
+                <h1 className="text-2xl font-bold text-slate-900">{displayName}</h1>
+                <span
+                  className={`px-3 py-1 rounded-full text-xs font-bold font-mono flex items-center gap-1 ${
+                    displayType === 'HOT'
+                      ? 'bg-rose-500/15 text-rose-800 border border-rose-300'
+                      : displayType === 'WARM'
+                      ? 'bg-amber-500/15 text-amber-800 border border-amber-300'
+                      : 'bg-white/70 text-slate-700 border border-white/80'
+                  }`}
+                >
+                  <Flame className="w-3.5 h-3.5" />
+                  {displayType} LEAD • {displayScore}/100
+                </span>
+                <span className="px-2.5 py-1 rounded-full text-xs font-semibold bg-indigo-500/15 text-indigo-800 border border-indigo-300">
+                  Stage: {displayStage.replace('_', ' ')}
+                </span>
               </div>
-              <div className="text-right font-mono tabular-nums">
-                <div className="text-2xl font-bold text-emerald-700">{lead.leadScore}/100</div>
-                <div className="text-xs font-semibold text-slate-700">{lead.leadType}</div>
+
+              <div className="flex flex-wrap items-center gap-4 text-xs text-slate-600 mt-2">
+                <span className="flex items-center gap-1.5 font-medium text-slate-800">
+                  <Building2 className="w-3.5 h-3.5 text-slate-500" />
+                  {displayCompany} ({lead.interestedService || 'WhatsApp Inquiry'})
+                </span>
+                <span className="flex items-center gap-1.5 font-mono">
+                  <Phone className="w-3.5 h-3.5 text-slate-500" />
+                  {displayPhone}
+                </span>
+                <span className="flex items-center gap-1.5">
+                  <Mail className="w-3.5 h-3.5 text-slate-500" />
+                  {displayEmail}
+                </span>
               </div>
             </div>
+          </div>
 
-            {/* Plain-English Summary */}
-            <div>
-              <div className="text-xs font-semibold text-slate-700 mb-1">
-                Summary of Conversation
-              </div>
-              <p className="text-xs text-slate-700 bg-slate-50 p-3.5 rounded-lg border border-slate-200 leading-relaxed">
-                {lead.aiSummary}
+          {/* Interactive Score & Status Controls */}
+          <div className="flex flex-wrap items-center gap-3 pt-4 lg:pt-0 border-t lg:border-t-0 border-white/60">
+            <div className="px-4 py-2.5 rounded-2xl bg-white/60 border border-white/80 backdrop-blur-md">
+              <p className="text-[10px] font-bold text-slate-500 uppercase">Confirmed Budget</p>
+              <p className="text-lg font-bold font-mono text-slate-900">
+                {lead.budget || '₹50,000'}
               </p>
             </div>
 
-            {/* Buying Signals & Questions */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="bg-emerald-50/60 border border-emerald-200 rounded-xl p-4 space-y-2">
-                <div className="text-xs font-bold text-emerald-900 flex items-center gap-1.5">
-                  <TrendingUp className="w-4 h-4 text-emerald-600" />
-                  <span>Why they look ready to buy:</span>
-                </div>
-                <ul className="space-y-1.5 text-xs text-slate-700">
-                  {(lead.buyingSignals || []).map((sig, i) => (
-                    <li key={i} className="flex items-start gap-2">
-                      <span className="text-emerald-600 font-bold">•</span>
-                      <span>{sig}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              <div className="bg-amber-50/60 border border-amber-200 rounded-xl p-4 space-y-2">
-                <div className="text-xs font-bold text-amber-900 flex items-center gap-1.5">
-                  <ShieldAlert className="w-4 h-4 text-amber-600" />
-                  <span>Questions or concerns to address:</span>
-                </div>
-                {(lead.detectedObjections || []).length > 0 ? (
-                  <ul className="space-y-1.5 text-xs text-slate-700">
-                    {(lead.detectedObjections || []).map((obj, i) => (
-                      <li key={i} className="flex items-start gap-2">
-                        <span className="text-amber-600 font-bold">•</span>
-                        <span>{obj}</span>
-                      </li>
-                    ))}
-                  </ul>
-                ) : (
-                  <p className="text-xs text-slate-500">
-                    No active concerns for this customer.
-                  </p>
-                )}
-              </div>
-            </div>
-
-            {/* How the Score is Calculated */}
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-slate-700">
-                How AI Calculated the {lead.leadScore}/100 Score
-              </div>
-              <div className="grid grid-cols-1 sm:grid-cols-5 gap-3 bg-slate-50 p-4 rounded-xl border border-slate-200">
-                {[
-                  { label: 'Budget Ready', val: sb.budgetReadiness, max: 25 },
-                  { label: 'Clear Need', val: sb.needSpecificity, max: 25 },
-                  { label: 'Urgent Timeline', val: sb.timelineUrgency, max: 20 },
-                  { label: 'Decision Maker', val: sb.decisionAuthority, max: 15 },
-                  { label: 'Chat Activity', val: sb.engagementDepth, max: 15 }
-                ].map((item) => {
-                  const pct = Math.round((item.val / item.max) * 100);
-                  return (
-                    <div key={item.label} className="space-y-1.5">
-                      <div className="text-[11px] font-medium text-slate-600">{item.label}</div>
-                      <div className="text-sm font-bold font-mono tabular-nums text-slate-900">
-                        {item.val}{' '}
-                        <span className="text-xs font-normal text-slate-400">/ {item.max}</span>
-                      </div>
-                      <div className="w-full h-1.5 bg-slate-200 rounded-sm overflow-hidden">
-                        <div
-                          className={`h-full ${
-                            pct >= 80
-                              ? 'bg-emerald-600'
-                              : pct >= 55
-                              ? 'bg-amber-500'
-                              : 'bg-slate-400'
-                          }`}
-                          style={{ width: `${pct}%` }}
-                        />
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </div>
-
-            {/* Editable Fields */}
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-xs">
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Deal Stage</label>
-                <select
-                  value={lead.leadStatus}
-                  onChange={(e) => updateLead(lead.id, { leadStatus: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg bg-white"
-                >
-                  <option value="NEW">NEW</option>
-                  <option value="CONTACTED">CONTACTED</option>
-                  <option value="QUALIFIED">QUALIFIED</option>
-                  <option value="PROPOSAL">PROPOSAL</option>
-                  <option value="NEGOTIATION">NEGOTIATION</option>
-                  <option value="WON">WON</option>
-                  <option value="LOST">LOST</option>
-                </select>
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Budget</label>
-                <input
-                  type="text"
-                  value={lead.budget}
-                  onChange={(e) => updateLead(lead.id, { budget: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg font-mono"
-                />
-              </div>
-              <div>
-                <label className="block font-semibold text-slate-700 mb-1">Timeline</label>
-                <input
-                  type="text"
-                  value={lead.timeline}
-                  onChange={(e) => updateLead(lead.id, { timeline: e.target.value })}
-                  className="w-full px-3 py-2 border border-slate-200 rounded-lg"
-                />
-              </div>
-            </div>
-
-            {/* Customer Requirements List */}
-            <div>
-              <div className="text-xs font-semibold text-slate-700 mb-2">
-                Specific Things Customer Asked For
-              </div>
-              <ul className="space-y-1.5 text-xs text-slate-700 list-disc list-inside mb-3">
-                {lead.requirements.map((r, i) => (
-                  <li key={i}>{r}</li>
-                ))}
-              </ul>
-              <form
-                onSubmit={(e) => {
-                  e.preventDefault();
-                  if (!reqInput.trim()) return;
-                  updateLead(lead.id, {
-                    requirements: [...lead.requirements, reqInput.trim()]
-                  });
-                  setReqInput('');
-                }}
-                className="flex gap-2"
-              >
-                <input
-                  type="text"
-                  value={reqInput}
-                  onChange={(e) => setReqInput(e.target.value)}
-                  placeholder="Add another requirement..."
-                  className="flex-1 px-3 py-1.5 text-xs border border-slate-200 rounded-lg"
-                />
+            <div className="flex items-center gap-1.5 bg-white/60 p-1.5 rounded-2xl border border-white/80 backdrop-blur-md">
+              {['HOT', 'WARM', 'COLD'].map((st) => (
                 <button
-                  type="submit"
-                  className="px-3 py-1.5 bg-slate-900 text-white text-xs font-semibold rounded-lg cursor-pointer"
+                  key={st}
+                  onClick={() =>
+                    updateLead(lead.id, {
+                      leadType: st,
+                      leadScore: st === 'HOT' ? 92 : st === 'WARM' ? 68 : 28,
+                    })
+                  }
+                  className={`px-3 py-1.5 rounded-xl text-xs font-bold transition-all cursor-pointer ${
+                    displayType === st
+                      ? st === 'HOT'
+                        ? 'bg-rose-600 text-white shadow-xs'
+                        : st === 'WARM'
+                        ? 'bg-amber-500 text-white shadow-xs'
+                        : 'bg-slate-800 text-white shadow-xs'
+                      : 'text-slate-600 hover:bg-white'
+                  }`}
                 >
-                  Add
+                  {st}
                 </button>
-              </form>
+              ))}
             </div>
           </div>
+        </div>
+      </div>
 
-          {/* WhatsApp Chat History */}
-          <div className="bg-white border border-slate-200 rounded-xl p-6 space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-200 pb-3">
-              <h3 className="text-sm font-bold text-slate-900">
-                Recent WhatsApp Messages ({convMessages.length})
-              </h3>
-              <button
-                type="button"
-                onClick={handleOpenChat}
-                className="text-xs font-semibold text-emerald-700 hover:underline cursor-pointer"
-              >
-                {linkedConv ? 'Reply in WhatsApp Inbox →' : 'Reopen WhatsApp Chat →'}
-              </button>
+      {/* 3-Column Deep Qualification & Activity Grid */}
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        {/* Left: AI Qualification & Notes */}
+        <div className="space-y-6">
+          <div className="glass-panel rounded-3xl p-5">
+            <div className="flex items-center justify-between mb-4">
+              <span className="text-xs font-bold text-indigo-900 uppercase tracking-wider flex items-center gap-1.5">
+                <Sparkles className="w-4 h-4 text-indigo-600" />
+                AI Qualification Breakdown
+              </span>
+              <span className="text-xs font-mono font-bold text-indigo-700 bg-indigo-500/15 px-2 py-0.5 rounded-full">
+                Score {displayScore}/100
+              </span>
             </div>
-            {convMessages.length === 0 ? (
-              <div className="p-4 rounded-lg bg-slate-50 border border-dashed border-slate-200 text-xs text-slate-500 text-center">
-                {linkedConv
-                  ? 'No messages recorded in this WhatsApp thread yet.'
-                  : 'No active WhatsApp chat in Inbox. Click "Reopen WhatsApp Chat" above to start a new thread.'}
+
+            <p className="text-xs text-slate-700 bg-white/60 p-3 rounded-2xl border border-white/80 mb-3 leading-relaxed">
+              {lead.aiSummary || 'Customer qualified automatically via WhatsApp AI.'}
+            </p>
+
+            <div className="space-y-3 text-xs">
+              <div className="flex justify-between py-2 border-b border-white/50">
+                <span className="text-slate-600">Confirmed Budget</span>
+                <span className="font-mono font-bold text-slate-900">{lead.budget || '—'}</span>
               </div>
-            ) : (
-              <div className="space-y-2.5 max-h-80 overflow-y-auto">
-                {convMessages.map((m) => (
-                  <div
-                    key={m.id}
-                    className="p-3 rounded-lg bg-slate-50 border border-slate-200 text-xs"
-                  >
-                    <div className="flex justify-between text-[11px] text-slate-500 mb-1">
-                      <span className="font-semibold text-slate-800">
-                        {m.senderName} ({m.senderType})
-                      </span>
-                      <span className="font-mono">{m.timestamp}</span>
+              <div className="flex justify-between py-2 border-b border-white/50">
+                <span className="text-slate-600">Target Timeline</span>
+                <span className="font-semibold text-slate-900">{lead.timeline || '—'}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-white/50">
+                <span className="text-slate-600">Acquisition Source</span>
+                <span className="font-semibold text-slate-900">{lead.source || 'WhatsApp Inbound'}</span>
+              </div>
+              <div className="flex justify-between py-2">
+                <span className="text-slate-600">Assigned Owner</span>
+                <span className="font-semibold text-slate-900">{assignedRep.name}</span>
+              </div>
+            </div>
+
+            {/* Add Note */}
+            <form onSubmit={handleAddNote} className="mt-4 pt-4 border-t border-white/60 space-y-2">
+              <label className="block text-xs font-bold text-slate-700">
+                Add Sales Note
+              </label>
+              <textarea
+                rows={2}
+                value={noteInput}
+                onChange={(e) => setNoteInput(e.target.value)}
+                placeholder="Record call outcomes or custom pricing notes..."
+                className="w-full p-3 text-xs bg-white/75 border border-white/90 rounded-2xl focus:outline-none focus:bg-white focus:border-emerald-500"
+              />
+              <button
+                type="submit"
+                className="w-full py-2 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800 transition-colors cursor-pointer"
+              >
+                Save Note to Timeline
+              </button>
+            </form>
+
+            {(lead.notes || []).length > 0 && (
+              <div className="mt-3 space-y-2">
+                {lead.notes.map((n) => (
+                  <div key={n.id} className="p-2.5 rounded-xl bg-white/60 border border-white/80 text-xs">
+                    <div className="flex justify-between text-[10px] text-slate-500 mb-0.5">
+                      <span className="font-bold">{n.authorName}</span>
+                      <span>{n.createdAt}</span>
                     </div>
-                    <p className="text-slate-700">{m.content}</p>
+                    <p className="text-slate-800">{n.content}</p>
                   </div>
                 ))}
               </div>
             )}
           </div>
-        </div>
 
-        {/* Right Column: Reminders & Team Notes */}
-        <div className="space-y-6">
-          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-            <h3 className="text-sm font-bold text-slate-900">Schedule a Follow-up Call</h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                addFollowUp({
-                  leadId: lead.id,
-                  contactId: lead.contactId,
-                  assignedUserId: lead.assignedAgentId,
-                  date: fuDate,
-                  time: fuTime,
-                  note: fuNote || 'Scheduled follow-up call',
-                  status: 'PENDING'
-                });
-                setFuNote('');
-              }}
-              className="space-y-2.5 text-xs"
-            >
-              <div className="grid grid-cols-2 gap-2">
-                <input
-                  type="date"
-                  value={fuDate}
-                  onChange={(e) => setFuDate(e.target.value)}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg"
-                  required
-                />
-                <input
-                  type="time"
-                  value={fuTime}
-                  onChange={(e) => setFuTime(e.target.value)}
-                  className="px-2.5 py-1.5 border border-slate-200 rounded-lg"
-                  required
-                />
-              </div>
+          {/* Requirements Card */}
+          <div className="glass-panel rounded-3xl p-5">
+            <h3 className="text-xs font-bold text-slate-600 uppercase tracking-wider mb-3">
+              Extracted Requirements & Signals
+            </h3>
+            <div className="flex flex-wrap gap-1.5 mb-3">
+              {(lead.requirements || []).map((req) => (
+                <span
+                  key={req}
+                  className="px-2.5 py-1 rounded-xl bg-white/75 border border-white/90 text-slate-800 text-xs font-medium"
+                >
+                  {req}
+                </span>
+              ))}
+            </div>
+            <form onSubmit={handleAddRequirement} className="flex gap-2">
               <input
                 type="text"
-                value={fuNote}
-                onChange={(e) => setFuNote(e.target.value)}
-                placeholder="What is this reminder for?"
-                className="w-full px-3 py-1.5 border border-slate-200 rounded-lg"
+                value={newReqInput}
+                onChange={(e) => setNewReqInput(e.target.value)}
+                placeholder="Add requirement..."
+                className="flex-1 px-3 py-1.5 text-xs bg-white/75 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
               />
               <button
                 type="submit"
-                className="w-full py-2 bg-slate-900 text-white font-semibold rounded-lg flex items-center justify-center gap-1.5 cursor-pointer"
+                className="px-3 py-1.5 rounded-xl bg-slate-900 text-white text-xs font-semibold hover:bg-slate-800"
               >
-                <CalendarPlus className="w-3.5 h-3.5" />
-                <span>Save Reminder</span>
+                Add
               </button>
             </form>
-
-            <div className="divide-y divide-slate-100 pt-2">
-              {leadFollowUps.map((f) => (
-                <div key={f.id} className="py-2 text-xs">
-                  <div className="font-mono font-semibold text-slate-900">
-                    {f.date} at {f.time} · {f.status}
-                  </div>
-                  <div className="text-slate-600 mt-0.5">{f.note}</div>
-                </div>
-              ))}
-            </div>
           </div>
+        </div>
 
-          <div className="bg-white border border-slate-200 rounded-xl p-5 space-y-4">
-            <h3 className="text-sm font-bold text-slate-900">Team Notes</h3>
-            <form
-              onSubmit={(e) => {
-                e.preventDefault();
-                if (!noteText.trim()) return;
-                addLeadNote(lead.id, noteText);
-                setNoteText('');
-              }}
-              className="space-y-2 text-xs"
+        {/* Middle: Live WhatsApp Transcript Preview & Quick Composer */}
+        <div className="glass-panel rounded-3xl flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-white/60 bg-white/30 flex items-center justify-between">
+            <div>
+              <h3 className="text-sm font-bold text-slate-900">WhatsApp Conversation History</h3>
+              <p className="text-[11px] text-slate-600">Synced with Meta Cloud Webhook</p>
+            </div>
+            <button
+              onClick={handleOpenInbox}
+              className="text-xs font-semibold text-emerald-700 hover:text-emerald-800 cursor-pointer"
             >
-              <textarea
-                rows={3}
-                value={noteText}
-                onChange={(e) => setNoteText(e.target.value)}
-                placeholder="Write a note for your team..."
-                className="w-full p-2.5 border border-slate-200 rounded-lg"
-              />
-              <button
-                type="submit"
-                className="w-full py-2 bg-slate-900 text-white font-semibold rounded-lg cursor-pointer"
+              Full Inbox →
+            </button>
+          </div>
+
+          <div className="flex-1 p-4 space-y-3 max-h-[420px] overflow-y-auto glass-scrollbar">
+            {threadMessages.map((m) => (
+              <div
+                key={m.id}
+                className={`p-3.5 rounded-2xl text-xs leading-relaxed ${
+                  m.senderType === 'CUSTOMER'
+                    ? 'bg-white/85 border border-white text-slate-800 mr-6 shadow-2xs'
+                    : m.senderType === 'AI'
+                    ? 'bg-indigo-950/90 text-white ml-6 shadow-xs'
+                    : 'bg-emerald-700 text-white ml-6 shadow-xs'
+                }`}
               >
-                Save Note
-              </button>
-            </form>
-            <div className="space-y-2">
-              {(lead.notes || []).map((n) => (
-                <div
-                  key={n.id}
-                  className="p-3 bg-slate-50 border border-slate-200 rounded-lg text-xs"
-                >
-                  <div className="text-[11px] text-slate-500">
-                    {n.authorName} · {n.createdAt}
-                  </div>
-                  <p className="text-slate-800 mt-1">{n.content}</p>
+                <div className="flex items-center justify-between text-[10px] opacity-75 mb-1 font-mono">
+                  <span>{m.senderName || m.senderType}</span>
+                  <span>{m.timestamp}</span>
                 </div>
-              ))}
+                <p>{m.content || m.text}</p>
+              </div>
+            ))}
+          </div>
+
+          <form
+            onSubmit={handleSendQuickWhatsApp}
+            className="p-3.5 border-t border-white/60 bg-white/40 flex items-center gap-2"
+          >
+            <input
+              type="text"
+              value={quickWhatsAppMsg}
+              onChange={(e) => setQuickWhatsAppMsg(e.target.value)}
+              placeholder={`Send WhatsApp message to ${displayName}...`}
+              className="flex-1 px-3.5 py-2 text-xs bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+            />
+            <button
+              type="submit"
+              className="px-3.5 py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 flex items-center gap-1"
+            >
+              <Send className="w-3.5 h-3.5" />
+              Send
+            </button>
+          </form>
+        </div>
+
+        {/* Right: Follow-Up Tasks for this Lead */}
+        <div className="glass-panel rounded-3xl p-5 flex flex-col justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 mb-1">Scheduled Follow-Ups</h3>
+            <p className="text-xs text-slate-600 mb-4">
+              Action items linked to {displayName}
+            </p>
+
+            <div className="space-y-3 mb-4">
+              {leadFollowUps.length === 0 ? (
+                <p className="text-xs text-slate-500 py-6 text-center bg-white/50 rounded-2xl border border-dashed border-white/80">
+                  No follow-ups scheduled for this lead yet.
+                </p>
+              ) : (
+                leadFollowUps.map((f) => (
+                  <div
+                    key={f.id}
+                    className="p-3.5 rounded-2xl bg-white/65 border border-white/85 flex items-start gap-2.5"
+                  >
+                    <button
+                      onClick={() =>
+                        updateFollowUpStatus(
+                          f.id,
+                          f.status === 'COMPLETED' ? 'PENDING' : 'COMPLETED'
+                        )
+                      }
+                      className={`mt-0.5 w-4 h-4 rounded border flex items-center justify-center shrink-0 cursor-pointer ${
+                        f.status === 'COMPLETED'
+                          ? 'bg-emerald-600 border-emerald-600 text-white'
+                          : 'bg-white border-slate-400'
+                      }`}
+                    >
+                      {f.status === 'COMPLETED' && <CheckCircle2 className="w-3 h-3" />}
+                    </button>
+                    <div className="flex-1">
+                      <p
+                        className={`text-xs font-semibold ${
+                          f.status === 'COMPLETED' ? 'line-through text-slate-400' : 'text-slate-900'
+                        }`}
+                      >
+                        {f.note || f.task}
+                      </p>
+                      <span className="text-[10px] font-mono text-slate-500">
+                        {f.date} · {f.time}
+                      </span>
+                    </div>
+                  </div>
+                ))
+              )}
             </div>
           </div>
+
+          <form onSubmit={handleAddFollowUp} className="pt-4 border-t border-white/60 space-y-2">
+            <label className="block text-xs font-bold text-slate-700">
+              Schedule New Follow-Up
+            </label>
+            <input
+              type="text"
+              value={followUpTaskInput}
+              onChange={(e) => setFollowUpTaskInput(e.target.value)}
+              placeholder="e.g., Follow up on proposal pricing..."
+              className="w-full px-3.5 py-2 text-xs bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:border-emerald-500"
+            />
+            <button
+              type="submit"
+              className="w-full py-2 rounded-xl bg-emerald-600 text-white text-xs font-semibold hover:bg-emerald-500 transition-colors cursor-pointer"
+            >
+              Add Follow-Up Task
+            </button>
+          </form>
         </div>
       </div>
     </div>
