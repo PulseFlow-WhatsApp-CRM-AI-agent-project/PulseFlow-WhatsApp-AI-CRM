@@ -33,7 +33,7 @@ const TeamMemberSchema = new mongoose.Schema(
     id: { type: String, required: true, unique: true, index: true },
     name: { type: String, required: true },
     email: { type: String, required: true },
-    role: { type: String, enum: ['ADMIN', 'MANAGER', 'AGENT'], default: 'AGENT' },
+    role: { type: String, enum: ['ADMIN', 'AGENT'], default: 'AGENT' },
     phone: { type: String, default: '' },
     passwordHash: { type: String, default: '' },
     passwordSalt: { type: String, default: '' },
@@ -558,11 +558,19 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
     } else {
       const existingMembers = await TeamMember.find({});
       for (const tm of existingMembers) {
+        const updates = {};
         if (!tm.passwordHash || !tm.passwordSalt) {
           const { passwordHash, passwordSalt } = hashPassword('PulseFlow@123');
+          updates.passwordHash = passwordHash;
+          updates.passwordSalt = passwordSalt;
+        }
+        if (tm.role !== 'ADMIN' && tm.role !== 'AGENT') {
+          updates.role = 'AGENT';
+        }
+        if (Object.keys(updates).length > 0) {
           await TeamMember.findOneAndUpdate(
             { id: tm.id },
-            { $set: { passwordHash, passwordSalt } }
+            { $set: updates }
           );
         }
       }

@@ -36,7 +36,6 @@ import bgImage from '../public/bg.webp';
 export const CRMWorkspaceLayout = ({ children }) => {
   const {
     currentUser,
-    switchRole,
     logout,
     conversations,
     leads,
@@ -92,7 +91,10 @@ export const CRMWorkspaceLayout = ({ children }) => {
   ).length;
   const unreadNotifsCount = notifications.filter((n) => !n.isRead).length;
 
-  const userInitials = (currentUser?.name || 'BB')
+  const isAdmin = currentUser?.role === 'ADMIN';
+  const actualRole = isAdmin ? 'ADMIN' : 'AGENT';
+
+  const userInitials = (currentUser?.name || 'U')
     .split(' ')
     .map((part) => part[0])
     .join('')
@@ -103,7 +105,8 @@ export const CRMWorkspaceLayout = ({ children }) => {
     {
       label: 'Home',
       path: '/dashboard',
-      icon: Home
+      icon: Home,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'WhatsApp Inbox',
@@ -112,39 +115,46 @@ export const CRMWorkspaceLayout = ({ children }) => {
       isWhatsApp: true,
       badge: unreadChatsCount > 0 ? unreadChatsCount : totalConversationsCount,
       badgeDark: true,
-      alert: handoffCount > 0
+      alert: handoffCount > 0,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'What AI Knows',
       path: '/insights',
-      icon: Sparkles
+      icon: Sparkles,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Sales Leads',
       path: '/leads',
       icon: Target,
-      badge: hotLeadsCount > 0 ? hotLeadsCount : leads.length
+      badge: hotLeadsCount > 0 ? hotLeadsCount : leads.length,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Follow-up Tasks',
       path: '/follow-ups',
       icon: CalendarClock,
-      badge: pendingFollowUpsCount > 0 ? pendingFollowUpsCount : undefined
+      badge: pendingFollowUpsCount > 0 ? pendingFollowUpsCount : undefined,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Contacts',
       path: '/contacts',
-      icon: Users
+      icon: Users,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Analytics',
       path: '/analytics',
-      icon: BarChart3
+      icon: BarChart3,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Team Members',
       path: '/team',
-      icon: UserCog
+      icon: UserCog,
+      roles: ['ADMIN']
     }
   ];
 
@@ -153,46 +163,49 @@ export const CRMWorkspaceLayout = ({ children }) => {
       label: 'AI Knowledge Base',
       path: '/knowledge-base',
       icon: BookOpen,
-      roles: ['ADMIN', 'MANAGER', 'AGENT']
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'AI Reply Settings',
       path: '/ai-settings',
       icon: Bot,
-      roles: ['ADMIN', 'MANAGER', 'AGENT']
+      roles: ['ADMIN']
     },
     {
       label: 'All Conversations',
       path: '/conversations',
-      icon: MessagesSquare
+      icon: MessagesSquare,
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'Reports & Charts',
       path: '/analytics',
       icon: BarChart3,
-      roles: ['ADMIN', 'MANAGER', 'AGENT']
+      roles: ['ADMIN', 'AGENT']
     },
     {
       label: 'WhatsApp Connection',
       path: '/whatsapp-settings',
       icon: Smartphone,
-      roles: ['ADMIN', 'MANAGER', 'AGENT']
+      roles: ['ADMIN']
     },
     {
       label: 'System Settings',
       path: '/settings',
-      icon: Settings
+      icon: Settings,
+      roles: ['ADMIN']
     },
     {
       label: 'Company Profile',
       path: '/company-settings',
       icon: Building2,
-      roles: ['ADMIN', 'MANAGER']
+      roles: ['ADMIN']
     },
     {
       label: 'System Blueprint',
       path: '/architecture',
-      icon: FileCode2
+      icon: FileCode2,
+      roles: ['ADMIN']
     }
   ];
 
@@ -230,12 +243,7 @@ export const CRMWorkspaceLayout = ({ children }) => {
     };
   }, [quickQuery, leads, contacts, strategicFindings]);
 
-  const roleLabel =
-    currentUser?.role === 'ADMIN'
-      ? 'Admin'
-      : currentUser?.role === 'MANAGER'
-      ? 'Manager'
-      : 'Agent';
+  const roleLabel = actualRole;
 
   return (
     <div
@@ -301,20 +309,33 @@ export const CRMWorkspaceLayout = ({ children }) => {
           </button>
 
           {/* AI Active Status Pill */}
-          <Link
-            to="/ai-settings"
-            className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white/75 hover:bg-white/95 backdrop-blur-xl border border-white/90 shadow-xs text-xs font-semibold text-slate-800 transition-all whitespace-nowrap"
-            title="Configure AI Auto-Reply Engine"
-          >
-            <span
-              className={`w-2.5 h-2.5 rounded-full ${
-                aiSettings?.aiEnabled !== false
-                  ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]'
-                  : 'bg-amber-500'
-              }`}
-            />
-            <span>{aiSettings?.aiEnabled !== false ? 'AI Active' : 'AI Paused'}</span>
-          </Link>
+          {isAdmin ? (
+            <Link
+              to="/ai-settings"
+              className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white/75 hover:bg-white/95 backdrop-blur-xl border border-white/90 shadow-xs text-xs font-semibold text-slate-800 transition-all whitespace-nowrap"
+              title="Configure AI Auto-Reply Engine"
+            >
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  aiSettings?.aiEnabled !== false
+                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]'
+                    : 'bg-amber-500'
+                }`}
+              />
+              <span>{aiSettings?.aiEnabled !== false ? 'AI Active' : 'AI Paused'}</span>
+            </Link>
+          ) : (
+            <div className="hidden sm:inline-flex items-center gap-2 px-3.5 py-2 rounded-full bg-white/75 backdrop-blur-xl border border-white/90 shadow-xs text-xs font-semibold text-slate-800 whitespace-nowrap">
+              <span
+                className={`w-2.5 h-2.5 rounded-full ${
+                  aiSettings?.aiEnabled !== false
+                    ? 'bg-emerald-500 shadow-[0_0_8px_rgba(16,185,129,0.7)]'
+                    : 'bg-amber-500'
+                }`}
+              />
+              <span>{aiSettings?.aiEnabled !== false ? 'AI Active' : 'AI Paused'}</span>
+            </div>
+          )}
 
           {/* Hot Lead Notification Pill when unacknowledged hot leads exist */}
           {hotLeadAlerts.length > 0 && (
@@ -417,15 +438,15 @@ export const CRMWorkspaceLayout = ({ children }) => {
               </div>
               <div className="hidden sm:block text-left leading-tight">
                 <div className="text-xs font-bold text-slate-900 truncate max-w-[110px]">
-                  {currentUser?.name || 'Binil B'}
+                  {currentUser?.name}
                 </div>
-                <div className="text-[10px] font-medium text-slate-500">{roleLabel}</div>
+                <div className="text-[10px] font-mono font-bold text-slate-500">{roleLabel}</div>
               </div>
               <ChevronDown className="w-3.5 h-3.5 text-slate-500 hidden sm:block" />
             </button>
 
             {profileMenuOpen && (
-              <div className="absolute right-0 mt-2.5 w-64 bg-white/95 backdrop-blur-2xl border border-white rounded-2xl shadow-2xl z-50 p-3.5 space-y-3">
+              <div className="absolute right-0 mt-2.5 w-64 bg-white/95 backdrop-blur-2xl border border-white rounded-2xl shadow-2xl z-50 p-3.5 space-y-2.5">
                 <div className="flex items-center justify-between pb-2.5 border-b border-slate-200/70">
                   <div className="min-w-0 pr-2">
                     <div className="text-xs font-bold text-slate-900 truncate">{currentUser?.name}</div>
@@ -435,48 +456,29 @@ export const CRMWorkspaceLayout = ({ children }) => {
                     )}
                   </div>
                   <span className="px-2 py-0.5 rounded-md bg-emerald-50 text-emerald-700 font-mono text-[10px] font-bold shrink-0">
-                    {currentUser?.role}
+                    {actualRole}
                   </span>
                 </div>
 
-                <div className="space-y-1.5">
-                  <div className="text-[11px] font-semibold text-slate-500">
-                    Switch Role View Mode
-                  </div>
-                  <div className="grid grid-cols-3 gap-1 bg-slate-100 p-1 rounded-xl">
-                    {['ADMIN', 'MANAGER', 'AGENT'].map((role) => (
-                      <button
-                        key={role}
-                        onClick={() => switchRole(role)}
-                        className={`py-1 text-[10px] font-bold rounded-lg transition-all cursor-pointer ${
-                          currentUser?.role === role
-                            ? 'bg-slate-900 text-white shadow-2xs'
-                            : 'text-slate-600 hover:text-slate-900'
-                        }`}
-                      >
-                        {role}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-1 pt-1 border-t border-slate-200/70 text-xs">
+                <div className="space-y-1 text-xs">
                   <Link
                     to="/profile"
                     onClick={() => setProfileMenuOpen(false)}
                     className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-slate-700 hover:bg-slate-100 font-medium"
                   >
                     <UserCircle className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Edit Profile & Password</span>
+                    <span>{isAdmin ? 'Edit Profile & Password' : 'My Account Profile'}</span>
                   </Link>
-                  <Link
-                    to="/team"
-                    onClick={() => setProfileMenuOpen(false)}
-                    className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-slate-700 hover:bg-slate-100 font-medium"
-                  >
-                    <UserCog className="w-3.5 h-3.5 text-slate-500" />
-                    <span>Team Members</span>
-                  </Link>
+                  {isAdmin && (
+                    <Link
+                      to="/team"
+                      onClick={() => setProfileMenuOpen(false)}
+                      className="flex items-center gap-2 px-2.5 py-1.5 rounded-lg text-slate-700 hover:bg-slate-100 font-medium"
+                    >
+                      <UserCog className="w-3.5 h-3.5 text-slate-500" />
+                      <span>Team Members</span>
+                    </Link>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -528,6 +530,8 @@ export const CRMWorkspaceLayout = ({ children }) => {
             {/* Primary Navigation Links */}
             <nav className="space-y-1">
               {primaryNavItems.map((item) => {
+                const allowed = !item.roles || item.roles.includes(actualRole);
+                if (!allowed) return null;
                 const Icon = item.icon;
                 const active = isPathActive(item.path);
                 return (
@@ -598,7 +602,7 @@ export const CRMWorkspaceLayout = ({ children }) => {
               {aiSectionOpen && (
                 <div className="space-y-1 mt-1">
                   {aiAutomationNavItems.map((item) => {
-                    const allowed = !item.roles || item.roles.includes(currentUser?.role);
+                    const allowed = !item.roles || item.roles.includes(actualRole);
                     if (!allowed) return null;
                     const Icon = item.icon;
                     const active =
@@ -679,10 +683,10 @@ export const CRMWorkspaceLayout = ({ children }) => {
 
               <button
                 type="button"
-                onClick={() => navigate('/ai-settings')}
+                onClick={() => navigate(isAdmin ? '/ai-settings' : '/inbox')}
                 className="mt-3 w-full py-2 px-3 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold flex items-center justify-center gap-1.5 shadow-xs transition-all cursor-pointer"
               >
-                <span>Upgrade Plan</span>
+                <span>{isAdmin ? 'Configure AI' : 'Open Inbox'}</span>
                 <ArrowRight className="w-3.5 h-3.5" />
               </button>
             </div>

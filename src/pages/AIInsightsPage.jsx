@@ -20,6 +20,7 @@ export const AIInsightsPage = () => {
     contacts = [],
     leads = [],
     aiSettings = {},
+    currentUser,
     pushToast,
   } = useCRM();
 
@@ -156,15 +157,17 @@ export const AIInsightsPage = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
-          <button
-            onClick={() => navigate('/ai-settings')}
-            className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-white/80 bg-white/75 text-xs font-semibold text-slate-700 hover:bg-white shadow-2xs transition-all backdrop-blur-md cursor-pointer"
-          >
-            <Sliders className="w-3.5 h-3.5" />
-            Configure AI Prompts & Thresholds
-          </button>
-        </div>
+        {currentUser?.role === 'ADMIN' && (
+          <div className="flex items-center gap-2.5">
+            <button
+              onClick={() => navigate('/ai-settings')}
+              className="inline-flex items-center gap-2 px-4 py-2 rounded-xl border border-white/80 bg-white/75 text-xs font-semibold text-slate-700 hover:bg-white shadow-2xs transition-all backdrop-blur-md cursor-pointer"
+            >
+              <Sliders className="w-3.5 h-3.5" />
+              Configure AI Prompts & Thresholds
+            </button>
+          </div>
+        )}
       </div>
 
       {/* Interactive AI Qualification Sandbox + Intent Distribution */}

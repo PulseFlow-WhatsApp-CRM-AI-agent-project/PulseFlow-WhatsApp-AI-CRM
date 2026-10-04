@@ -87,37 +87,51 @@ export const CRMProvider = ({ children }) => {
 
       if (Array.isArray(data.teamMembers) && data.teamMembers.length > 0) {
         setTeamMembers(data.teamMembers);
-        setCurrentUser((prev) => {
-          if (!prev?.id) return null;
-          let hasToken = false;
-          try {
-            hasToken = Boolean(localStorage.getItem('pulseflow_auth_token'));
-          } catch {
-            hasToken = false;
-          }
-          if (!hasToken) return null;
+        let savedToken = '';
+        try {
+          savedToken = localStorage.getItem('pulseflow_auth_token') || '';
+        } catch {
+          savedToken = '';
+        }
 
-          const found = data.teamMembers.find(
-            (m) => m.id === prev.id || (prev.email && m.email?.toLowerCase() === prev.email.toLowerCase())
-          );
-          if (!found || found.isActive === false) {
-            setIsAuthenticated(false);
-            setAuthToken('');
-            try {
-              localStorage.removeItem('pulseflow_auth_token');
-              localStorage.removeItem('pulseflow_auth_user');
-            } catch {
-              // ignore
+        if (savedToken) {
+          fetch('/api/auth/me', {
+            headers: {
+              Accept: 'application/json',
+              Authorization: `Bearer ${savedToken}`
             }
-            return null;
-          }
-          try {
-            localStorage.setItem('pulseflow_auth_user', JSON.stringify(found));
-          } catch {
-            // ignore
-          }
-          return found;
-        });
+          })
+            .then(async (meRes) => {
+              if (!meRes.ok) {
+                setIsAuthenticated(false);
+                setAuthToken('');
+                setCurrentUser(null);
+                try {
+                  localStorage.removeItem('pulseflow_auth_token');
+                  localStorage.removeItem('pulseflow_auth_user');
+                } catch {
+                  // ignore
+                }
+                return;
+              }
+              const meData = await meRes.json();
+              if (meData?.user) {
+                setCurrentUser(meData.user);
+                setIsAuthenticated(true);
+                try {
+                  localStorage.setItem('pulseflow_auth_user', JSON.stringify(meData.user));
+                } catch {
+                  // ignore
+                }
+              }
+            })
+            .catch(() => {
+              // ignore transient network errors
+            });
+        } else {
+          setCurrentUser(null);
+          setIsAuthenticated(false);
+        }
       }
       if (Array.isArray(data.contacts)) {
         setContacts((prev) => {
@@ -395,9 +409,11 @@ export const CRMProvider = ({ children }) => {
 
   const registerUser = async ({ name, email, phone, password, role }) => {
     try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
       const res = await fetch('/api/auth/register', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers,
         body: JSON.stringify({ name, email, phone, password, role })
       });
       const data = await res.json();
@@ -435,7 +451,35 @@ export const CRMProvider = ({ children }) => {
     }
   };
 
-  const changePassword = async ({ userId, email, currentPassword, newPassword, adminOverride }) => {
+  const updateOwnProfile = async ({ name, email, phone }) => {
+    try {
+      const headers = { 'Content-Type': 'application/json' };
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch('/api/auth/profile', {
+        method: 'PATCH',
+        headers,
+        body: JSON.stringify({ name, email, phone })
+      });
+      const data = await res.json();
+      if (!res.ok || !data?.user) {
+        pushToast('Update Failed', data?.error || 'Failed to update profile.', 'danger');
+        return { ok: false, error: data?.error || 'Failed to update profile.' };
+      }
+      setCurrentUser(data.user);
+      setTeamMembers((prev) => prev.map((m) => (m.id === data.user.id ? data.user : m)));
+      try {
+        localStorage.setItem('pulseflow_auth_user', JSON.stringify(data.user));
+      } catch {
+        // ignore
+      }
+      pushToast('User Profile Updated', 'Changes immediately applied across the CRM.', 'success');
+      return { ok: true, user: data.user };
+    } catch (err) {
+      return { ok: false, error: err.message || 'Failed to update profile.' };
+    }
+  };
+
+  const changePassword = async ({ userId, email, currentPassword, newPassword }) => {
     try {
       const headers = { 'Content-Type': 'application/json' };
       if (authToken) headers.Authorization = `Bearer ${authToken}`;
@@ -446,8 +490,7 @@ export const CRMProvider = ({ children }) => {
           userId: userId || currentUser?.id,
           email,
           currentPassword,
-          newPassword,
-          adminOverride: adminOverride || currentUser?.role === 'ADMIN'
+          newPassword
         })
       });
       const data = await res.json();
@@ -467,31 +510,6 @@ export const CRMProvider = ({ children }) => {
     }
   };
 
-  const loginAsRole = (role, email) => {
-    const normalizedRole =
-      String(role || '').toUpperCase().includes('ADMIN')
-        ? 'ADMIN'
-        : String(role || '').toUpperCase().includes('MANAGER')
-        ? 'MANAGER'
-        : String(role || '').toUpperCase().includes('AGENT')
-        ? 'AGENT'
-        : 'ADMIN';
-    const matched =
-      teamMembers.find((m) =>
-        email ? m.email.toLowerCase() === email.toLowerCase() : m.role === normalizedRole
-      ) ||
-      teamMembers.find((m) => m.role === normalizedRole) ||
-      teamMembers[0];
-    setCurrentUser(matched);
-    setIsAuthenticated(true);
-    try {
-      localStorage.setItem('pulseflow_auth_user', JSON.stringify(matched));
-    } catch {
-      // ignore
-    }
-    pushToast(`Signed in as ${matched.name}`, `Active Role: ${matched.role}`, 'success');
-  };
-
   const logout = () => {
     setIsAuthenticated(false);
     setAuthToken('');
@@ -503,21 +521,6 @@ export const CRMProvider = ({ children }) => {
       // ignore
     }
     pushToast('Signed out', 'Your session has been closed.');
-  };
-
-  const switchRole = (role) => {
-    const matched = teamMembers.find((m) => m.role === role) || currentUser || teamMembers[0];
-    const nextUser = { ...matched, role };
-    setCurrentUser(nextUser);
-    try {
-      localStorage.setItem('pulseflow_auth_user', JSON.stringify(nextUser));
-    } catch {
-      // ignore
-    }
-    pushToast(
-      `Switched Active Role to ${role}`,
-      `Now viewing CRM as ${nextUser.name} (${role})`
-    );
   };
 
   // Team CRUD (Persisted to MongoDB)
@@ -597,16 +600,25 @@ export const CRMProvider = ({ children }) => {
     }
   };
 
-  const deleteTeamMember = (id) => {
+  const deleteTeamMember = async (id) => {
     if (id === currentUser?.id && teamMembers.length <= 1) {
       pushToast('Action Blocked', 'You cannot delete the only remaining team member.', 'warning');
       return;
     }
-    setTeamMembers((prev) => prev.filter((m) => m.id !== id));
-    fetch(`/api/team/${id}`, { method: 'DELETE' }).catch((err) =>
-      console.error('Failed to delete team member:', err)
-    );
-    pushToast('Team Member Removed', 'User account removed from database.', 'warning');
+    try {
+      const headers = {};
+      if (authToken) headers.Authorization = `Bearer ${authToken}`;
+      const res = await fetch(`/api/team/${id}`, { method: 'DELETE', headers });
+      if (!res.ok) {
+        const data = await res.json().catch(() => ({}));
+        pushToast('Delete Failed', data?.error || 'Unauthorized to delete team member.', 'danger');
+        return;
+      }
+      setTeamMembers((prev) => prev.filter((m) => m.id !== id));
+      pushToast('Team Member Removed', 'User account removed from database.', 'warning');
+    } catch (err) {
+      console.error('Failed to delete team member:', err);
+    }
   };
 
   // Contacts CRUD (Persisted to MongoDB)
@@ -1171,16 +1183,20 @@ export const CRMProvider = ({ children }) => {
       updatedAt: new Date().toISOString().slice(0, 10),
       usageCount: 1
     };
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setKnowledgeBase((prev) => [created, ...prev]);
     fetch('/api/knowledge-base', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(created)
     }).catch((err) => console.error('Failed to add knowledge base entry:', err));
     pushToast('Knowledge Entry Added', `"${created.title}" is now live in database for AI context.`, 'success');
   };
 
   const updateKnowledgeArticle = (id, patch) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setKnowledgeBase((prev) =>
       prev.map((k) =>
         k.id === id ? { ...k, ...patch, updatedAt: new Date().toISOString().slice(0, 10) } : k
@@ -1188,15 +1204,17 @@ export const CRMProvider = ({ children }) => {
     );
     fetch(`/api/knowledge-base/${id}`, {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(patch)
     }).catch((err) => console.error('Failed to update knowledge base entry:', err));
     pushToast('Knowledge Base Updated', 'AI source-of-truth updated in database.', 'success');
   };
 
   const deleteKnowledgeArticle = (id) => {
+    const headers = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setKnowledgeBase((prev) => prev.filter((k) => k.id !== id));
-    fetch(`/api/knowledge-base/${id}`, { method: 'DELETE' }).catch((err) =>
+    fetch(`/api/knowledge-base/${id}`, { method: 'DELETE', headers }).catch((err) =>
       console.error('Failed to delete knowledge base entry:', err)
     );
     pushToast('Knowledge Entry Deleted', 'Removed from database.', 'warning');
@@ -1206,7 +1224,9 @@ export const CRMProvider = ({ children }) => {
     const gap = knowledgeGaps.find((g) => g.id === gapId);
     if (!gap || gap.resolved) return;
 
-    fetch(`/api/knowledge-gaps/${gapId}/resolve`, { method: 'POST' })
+    const headers = {};
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
+    fetch(`/api/knowledge-gaps/${gapId}/resolve`, { method: 'POST', headers })
       .then((r) => r.json())
       .then((data) => {
         if (data?.article) {
@@ -1227,30 +1247,36 @@ export const CRMProvider = ({ children }) => {
 
   // Settings (Persisted to MongoDB)
   const updateAISettings = (patch) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setAISettings((prev) => ({ ...prev, ...patch }));
     fetch('/api/settings/aiSettings', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(patch)
     }).catch((err) => console.error('Failed to save AI settings:', err));
     pushToast('AI Settings Saved', 'AI reply engine configuration updated in database.', 'success');
   };
 
   const updateWhatsAppSettings = (patch) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setWhatsAppSettings((prev) => ({ ...prev, ...patch }));
     fetch('/api/settings/whatsappSettings', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(patch)
     }).catch((err) => console.error('Failed to save WhatsApp settings:', err));
     pushToast('WhatsApp Settings Saved', 'Cloud API & Webhook settings saved in database.', 'success');
   };
 
   const updateCompanySettings = (patch) => {
+    const headers = { 'Content-Type': 'application/json' };
+    if (authToken) headers.Authorization = `Bearer ${authToken}`;
     setCompanySettings((prev) => ({ ...prev, ...patch }));
     fetch('/api/settings/companySettings', {
       method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
+      headers,
       body: JSON.stringify(patch)
     }).catch((err) => console.error('Failed to save company settings:', err));
     pushToast('Company Settings Saved', 'Organization profile saved in database.', 'success');
@@ -1286,10 +1312,9 @@ export const CRMProvider = ({ children }) => {
         authToken,
         loginWithEmailPassword,
         registerUser,
+        updateOwnProfile,
         changePassword,
-        loginAsRole,
         logout,
-        switchRole,
         teamMembers,
         addTeamMember,
         updateTeamMember,

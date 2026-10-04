@@ -1450,6 +1450,50 @@ function extractAuthUserFromReq(req) {
   return null;
 }
 
+const VALID_ROLES = ['ADMIN', 'AGENT'];
+
+async function resolveAuthenticatedUser(req) {
+  await connectDB();
+  const decoded = extractAuthUserFromReq(req);
+  if (!decoded || !decoded.id) return null;
+  const member = await TeamMember.findOne({ id: decoded.id });
+  if (!member || member.isActive === false) return null;
+  const actualRole = member.role === 'ADMIN' ? 'ADMIN' : 'AGENT';
+  const cleaned = cleanDoc(member);
+  return { ...cleaned, role: actualRole };
+}
+
+async function requireAuth(req, res, next) {
+  try {
+    const user = await resolveAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    }
+    req.authUser = user;
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
+async function requireAdmin(req, res, next) {
+  try {
+    const user = await resolveAuthenticatedUser(req);
+    if (!user) {
+      return res.status(401).json({ error: 'Authentication required. Please sign in.' });
+    }
+    if (user.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'Access Denied: Only ADMIN accounts are authorized to perform this operation.'
+      });
+    }
+    req.authUser = user;
+    return next();
+  } catch (err) {
+    return res.status(500).json({ error: err.message });
+  }
+}
+
 // Compute dynamic strategic findings from real database leads & conversations
 function computeDynamicFindings(leads, contacts, conversations) {
   const findings = [];
@@ -1634,10 +1678,12 @@ app.post('/api/auth/login', async (req, res) => {
     );
 
     const cleanUser = cleanDoc(updatedMember || member);
+    const actualRole = cleanUser.role === 'ADMIN' ? 'ADMIN' : 'AGENT';
+    cleanUser.role = actualRole;
     const token = signJwtToken({
       id: cleanUser.id,
       email: cleanUser.email,
-      role: cleanUser.role
+      role: actualRole
     });
 
     return res.json({
@@ -1657,8 +1703,26 @@ app.post('/api/auth/register', async (req, res) => {
     const email = String(req.body?.email || '').trim().toLowerCase();
     const phone = String(req.body?.phone || '').trim();
     const password = String(req.body?.password || '');
-    const roleRaw = String(req.body?.role || 'ADMIN').toUpperCase();
-    const role = ['ADMIN', 'MANAGER', 'AGENT'].includes(roleRaw) ? roleRaw : 'ADMIN';
+    const roleRaw = req.body?.role ? String(req.body.role).trim().toUpperCase() : 'AGENT';
+
+    if (!VALID_ROLES.includes(roleRaw)) {
+      return res.status(400).json({
+        error: 'Invalid role specified. Allowed roles are ADMIN and AGENT only.'
+      });
+    }
+
+    const caller = await resolveAuthenticatedUser(req);
+    const allMembers = await TeamMember.find({});
+    const hasAdmin = allMembers.some((m) => m.role === 'ADMIN');
+
+    // Only an existing ADMIN (or first-time bootstrap when no ADMIN exists) can create an ADMIN account
+    if (roleRaw === 'ADMIN' && hasAdmin && caller?.role !== 'ADMIN') {
+      return res.status(403).json({
+        error: 'Only an existing ADMIN can create another ADMIN account.'
+      });
+    }
+
+    const role = roleRaw === 'ADMIN' && (!hasAdmin || caller?.role === 'ADMIN') ? 'ADMIN' : 'AGENT';
 
     if (!name || !email || !password) {
       return res.status(400).json({ error: 'Full name, work email, and password are required.' });
@@ -1667,7 +1731,6 @@ app.post('/api/auth/register', async (req, res) => {
       return res.status(400).json({ error: 'Password must be at least 6 characters.' });
     }
 
-    const allMembers = await TeamMember.find({});
     const existing = allMembers.find(
       (m) => String(m.email || '').trim().toLowerCase() === email
     );
@@ -1716,29 +1779,48 @@ app.post('/api/auth/register', async (req, res) => {
   }
 });
 
-app.get('/api/auth/me', async (req, res) => {
+app.get('/api/auth/me', requireAuth, async (req, res) => {
+  return res.json({ ok: true, user: req.authUser });
+});
+
+app.patch('/api/auth/profile', requireAdmin, async (req, res) => {
   try {
-    await connectDB();
-    const decoded = extractAuthUserFromReq(req);
-    const targetId = decoded?.id || req.query.userId;
-    if (!targetId) {
-      return res.status(401).json({ error: 'Not authenticated' });
+    const targetId = req.authUser.id;
+    const updateFields = {};
+
+    if (typeof req.body?.name === 'string' && req.body.name.trim()) {
+      updateFields.name = req.body.name.trim();
     }
-    const member = await TeamMember.findOne({ id: targetId });
-    if (!member || member.isActive === false) {
-      return res.status(401).json({ error: 'User account not found or inactive' });
+    if (typeof req.body?.email === 'string' && req.body.email.trim()) {
+      const normalizedEmail = req.body.email.trim().toLowerCase();
+      const allMembers = await TeamMember.find({});
+      const duplicate = allMembers.find(
+        (m) => m.id !== targetId && String(m.email || '').trim().toLowerCase() === normalizedEmail
+      );
+      if (duplicate) {
+        return res.status(409).json({ error: 'Another team member is already using this email.' });
+      }
+      updateFields.email = normalizedEmail;
     }
-    return res.json({ ok: true, user: cleanDoc(member) });
+    if (typeof req.body?.phone === 'string') {
+      updateFields.phone = req.body.phone.trim();
+    }
+
+    const updated = await TeamMember.findOneAndUpdate(
+      { id: targetId },
+      { $set: updateFields },
+      { new: true }
+    );
+    return res.json({ ok: true, user: cleanDoc(updated) });
   } catch (err) {
     return res.status(500).json({ error: err.message });
   }
 });
 
-app.post('/api/auth/change-password', async (req, res) => {
+app.post('/api/auth/change-password', requireAdmin, async (req, res) => {
   try {
-    await connectDB();
-    const decoded = extractAuthUserFromReq(req);
-    const { userId, email, currentPassword, newPassword, adminOverride } = req.body || {};
+    const caller = req.authUser;
+    const { userId, email, currentPassword, newPassword } = req.body || {};
 
     if (!newPassword || String(newPassword).length < 6) {
       return res
@@ -1754,20 +1836,16 @@ app.post('/api/auth/change-password', async (req, res) => {
       member = allMembers.find(
         (m) => String(m.email || '').trim().toLowerCase() === String(email).trim().toLowerCase()
       );
-    } else if (decoded?.id) {
-      member = await TeamMember.findOne({ id: decoded.id });
+    } else {
+      member = await TeamMember.findOne({ id: caller.id });
     }
 
     if (!member) {
       return res.status(404).json({ error: 'Team member account not found.' });
     }
 
-    // Require currentPassword verification unless an authenticated ADMIN is resetting a member's password
-    const isCallerAdmin = decoded?.role === 'ADMIN' || Boolean(adminOverride);
-    if (!isCallerAdmin || currentPassword) {
-      if (!currentPassword) {
-        return res.status(400).json({ error: 'Current password is required to change your password.' });
-      }
+    // When changing own password and currentPassword is provided, verify it
+    if (member.id === caller.id && currentPassword) {
       const isCurrentValid =
         member.passwordHash && member.passwordSalt
           ? verifyPassword(currentPassword, member.passwordHash, member.passwordSalt)
@@ -1794,15 +1872,20 @@ app.post('/api/auth/change-password', async (req, res) => {
   }
 });
 
-// 2. Team Members CRUD
-app.post('/api/team', async (req, res) => {
+// 2. Team Members CRUD (Strictly ADMIN-only)
+app.post('/api/team', requireAdmin, async (req, res) => {
   try {
-    await connectDB();
     const name = String(req.body?.name || '').trim();
     const email = String(req.body?.email || '').trim().toLowerCase();
     const phone = String(req.body?.phone || '').trim();
-    const roleRaw = String(req.body?.role || 'AGENT').toUpperCase();
-    const role = ['ADMIN', 'MANAGER', 'AGENT'].includes(roleRaw) ? roleRaw : 'AGENT';
+    const roleRaw = req.body?.role ? String(req.body.role).trim().toUpperCase() : 'AGENT';
+
+    if (!VALID_ROLES.includes(roleRaw)) {
+      return res.status(400).json({
+        error: 'Invalid role. Allowed roles are ADMIN and AGENT only.'
+      });
+    }
+    const role = roleRaw;
     const rawPassword = String(req.body?.password || 'PulseFlow@123');
 
     if (!name || !email) {
@@ -1844,39 +1927,27 @@ app.post('/api/team', async (req, res) => {
   }
 });
 
-app.patch('/api/team/:id', async (req, res) => {
+app.patch('/api/team/:id', requireAdmin, async (req, res) => {
   try {
-    await connectDB();
     const targetId = req.params.id;
     const existing = await TeamMember.findOne({ id: targetId });
     if (!existing) {
       return res.status(404).json({ error: 'Team member not found.' });
     }
 
+    if (
+      req.body.name !== undefined ||
+      req.body.email !== undefined ||
+      req.body.phone !== undefined ||
+      req.body.role !== undefined
+    ) {
+      return res.status(403).json({
+        error: 'Editing existing team member details is disabled. Delete and recreate the account if changes are required.'
+      });
+    }
+
     const updateFields = {};
-    if (typeof req.body.name === 'string' && req.body.name.trim()) {
-      updateFields.name = req.body.name.trim();
-    }
-    if (typeof req.body.email === 'string' && req.body.email.trim()) {
-      const normalizedEmail = req.body.email.trim().toLowerCase();
-      const allMembers = await TeamMember.find({});
-      const duplicate = allMembers.find(
-        (m) => m.id !== targetId && String(m.email || '').trim().toLowerCase() === normalizedEmail
-      );
-      if (duplicate) {
-        return res.status(409).json({ error: 'Another team member is already using this email.' });
-      }
-      updateFields.email = normalizedEmail;
-    }
-    if (typeof req.body.phone === 'string') {
-      updateFields.phone = req.body.phone.trim();
-    }
-    if (typeof req.body.role === 'string') {
-      const roleUpper = req.body.role.toUpperCase();
-      if (['ADMIN', 'MANAGER', 'AGENT'].includes(roleUpper)) {
-        updateFields.role = roleUpper;
-      }
-    }
+
     if (typeof req.body.isActive === 'boolean') {
       updateFields.isActive = req.body.isActive;
     }
@@ -1891,6 +1962,10 @@ app.patch('/api/team/:id', async (req, res) => {
       updateFields.passwordSalt = passwordSalt;
     }
 
+    if (Object.keys(updateFields).length === 0) {
+      return res.status(400).json({ error: 'No valid status or password update fields provided.' });
+    }
+
     const updated = await TeamMember.findOneAndUpdate(
       { id: targetId },
       { $set: updateFields },
@@ -1902,7 +1977,7 @@ app.patch('/api/team/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/team/:id', async (req, res) => {
+app.delete('/api/team/:id', requireAdmin, async (req, res) => {
   try {
     await TeamMember.findOneAndDelete({ id: req.params.id });
     res.json({ deleted: true });
@@ -2631,8 +2706,8 @@ app.delete('/api/follow-ups/:id', async (req, res) => {
   }
 });
 
-// 7. Knowledge Base & Gaps CRUD
-app.post('/api/knowledge-base', async (req, res) => {
+// 7. Knowledge Base & Gaps CRUD (Write operations require ADMIN)
+app.post('/api/knowledge-base', requireAdmin, async (req, res) => {
   try {
     const created = await KnowledgeBase.create({
       ...req.body,
@@ -2646,7 +2721,7 @@ app.post('/api/knowledge-base', async (req, res) => {
   }
 });
 
-app.patch('/api/knowledge-base/:id', async (req, res) => {
+app.patch('/api/knowledge-base/:id', requireAdmin, async (req, res) => {
   try {
     const updated = await KnowledgeBase.findOneAndUpdate(
       { id: req.params.id },
@@ -2664,7 +2739,7 @@ app.patch('/api/knowledge-base/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/knowledge-base/:id', async (req, res) => {
+app.delete('/api/knowledge-base/:id', requireAdmin, async (req, res) => {
   try {
     await KnowledgeBase.findOneAndDelete({ id: req.params.id });
     res.json({ deleted: true });
@@ -2673,7 +2748,7 @@ app.delete('/api/knowledge-base/:id', async (req, res) => {
   }
 });
 
-app.post('/api/knowledge-gaps/:id/resolve', async (req, res) => {
+app.post('/api/knowledge-gaps/:id/resolve', requireAdmin, async (req, res) => {
   try {
     const gap = await KnowledgeGap.findOne({ id: req.params.id });
     if (!gap) return res.status(404).json({ error: 'Knowledge gap not found' });
@@ -2733,7 +2808,7 @@ app.post('/api/ai/test', async (req, res) => {
   }
 });
 
-app.patch('/api/settings/:type', async (req, res) => {
+app.patch('/api/settings/:type', requireAdmin, async (req, res) => {
   try {
     const type = req.params.type;
     const existing = await Setting.findOne({ type });

@@ -114,24 +114,27 @@ export const LoginPage = () => {
                 Quick Fill Team Member Account
               </label>
               <div className="flex flex-wrap gap-1.5">
-                {teamMembers.slice(0, 4).map((tm) => (
-                  <button
-                    key={tm.id}
-                    type="button"
-                    onClick={() => {
-                      setEmail(tm.email);
-                      setPassword('PulseFlow@123');
-                      setErrorMsg('');
-                    }}
-                    className={`py-1.5 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
-                      email.toLowerCase() === tm.email?.toLowerCase()
-                        ? 'bg-slate-900 text-white shadow-xs'
-                        : 'bg-white/80 text-slate-700 border border-white hover:bg-white'
-                    }`}
-                  >
-                    {tm.name} ({tm.role})
-                  </button>
-                ))}
+                {teamMembers.slice(0, 4).map((tm) => {
+                  const displayRole = tm.role === 'ADMIN' ? 'ADMIN' : 'AGENT';
+                  return (
+                    <button
+                      key={tm.id}
+                      type="button"
+                      onClick={() => {
+                        setEmail(tm.email);
+                        setPassword('PulseFlow@123');
+                        setErrorMsg('');
+                      }}
+                      className={`py-1.5 px-2.5 rounded-xl text-[11px] font-bold transition-all cursor-pointer ${
+                        email.toLowerCase() === tm.email?.toLowerCase()
+                          ? 'bg-slate-900 text-white shadow-xs'
+                          : 'bg-white/80 text-slate-700 border border-white hover:bg-white'
+                      }`}
+                    >
+                      {tm.name} ({displayRole})
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
@@ -326,7 +329,6 @@ export const RegisterPage = () => {
                 className="w-full px-3 py-2.5 text-xs font-semibold bg-white/80 border border-white/90 rounded-xl focus:outline-none focus:bg-white focus:border-emerald-500"
               >
                 <option value="ADMIN">ADMIN</option>
-                <option value="MANAGER">MANAGER</option>
                 <option value="AGENT">AGENT</option>
               </select>
             </div>
