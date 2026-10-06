@@ -461,13 +461,13 @@ Your responsibilities:
 };
 
 export const INITIAL_WHATSAPP_SETTINGS = {
-  phoneNumberId: '1384094818114996',
-  businessAccountId: '1409996531275243',
-  displayPhoneNumber: '+1 555-178-1439',
+  phoneNumberId: '',
+  businessAccountId: '',
+  displayPhoneNumber: '',
   verifyToken: 'pulseflow_webhook_2026_secure',
   webhookUrl: 'http://localhost:3000/webhook',
-  isConnected: true,
-  lastWebhookAt: 'Ready for incoming events',
+  isConnected: false,
+  lastWebhookAt: 'Awaiting connection',
   n8nEnabled: false,
   n8nWebhookUrl: ''
 };

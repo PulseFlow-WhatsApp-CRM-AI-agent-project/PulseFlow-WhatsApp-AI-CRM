@@ -266,6 +266,68 @@ const NotificationSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const WhatsAppAccountSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, index: true },
+    connectedByUserId: { type: String, default: '', index: true },
+    connectedBy: { type: String, default: '' },
+    wabaId: { type: String, default: '', index: true },
+    phoneNumberId: { type: String, default: '', index: true },
+    businessPortfolioId: { type: String, default: '' },
+    businessId: { type: String, default: '' },
+    businessName: { type: String, default: '' },
+    wabaName: { type: String, default: '' },
+    displayPhoneNumber: { type: String, default: '' },
+    verifiedName: { type: String, default: '' },
+    qualityRating: { type: String, default: '' },
+    codeVerificationStatus: { type: String, default: '' },
+    platformType: { type: String, default: '' },
+    isOnBizApp: { type: Boolean, default: false },
+    connectionStatus: {
+      type: String,
+      enum: ['NOT_CONNECTED', 'CONNECTING', 'CONNECTED', 'ERROR', 'DISCONNECTED'],
+      default: 'NOT_CONNECTED'
+    },
+    status: {
+      type: String,
+      enum: ['NOT_CONNECTED', 'CONNECTING', 'CONNECTED', 'ERROR', 'DISCONNECTED'],
+      default: 'NOT_CONNECTED'
+    },
+    coexistenceStatus: {
+      type: String,
+      enum: [
+        'NOT_CONNECTED',
+        'COEXISTENCE_PENDING',
+        'COEXISTENCE_CONNECTED',
+        'NOT_ELIGIBLE',
+        'DISCONNECTED',
+        'ERROR'
+      ],
+      default: 'NOT_CONNECTED'
+    },
+    onboardingMode: {
+      type: String,
+      enum: ['COEXISTENCE', 'CLOUD_API', 'MANUAL_FALLBACK'],
+      default: 'COEXISTENCE'
+    },
+    coexistenceEligible: { type: Boolean, default: null },
+    coexistenceStatusNote: { type: String, default: '' },
+    smbStateSyncRequested: { type: Boolean, default: false },
+    smbHistorySyncRequested: { type: Boolean, default: false },
+    accessToken: { type: String, default: '' },
+    tokenType: { type: String, default: 'bearer' },
+    webhookSubscribed: { type: Boolean, default: false },
+    messagingActive: { type: Boolean, default: false },
+    metaAppId: { type: String, default: '' },
+    embeddedSignupConfigId: { type: String, default: '' },
+    connectedAt: { type: String, default: '' },
+    updatedAt: { type: String, default: '' },
+    lastVerifiedAt: { type: String, default: '' },
+    lastError: { type: String, default: '' }
+  },
+  { timestamps: true }
+);
+
 // Real Mongoose Models
 const RealTeamMember =
   mongoose.models.TeamMember || mongoose.model('TeamMember', TeamMemberSchema);
@@ -282,6 +344,9 @@ const RealKnowledgeGap =
 const RealSetting = mongoose.models.Setting || mongoose.model('Setting', SettingSchema);
 const RealNotification =
   mongoose.models.Notification || mongoose.model('Notification', NotificationSchema);
+const RealWhatsAppAccount =
+  mongoose.models.WhatsAppAccount ||
+  mongoose.model('WhatsAppAccount', WhatsAppAccountSchema);
 
 // ============================================================================
 // IN-MEMORY FALLBACK DATABASE ADAPTER
@@ -516,7 +581,8 @@ const inMemoryStores = {
     { type: 'whatsappSettings', data: initialWhatsAppSettings },
     { type: 'companySettings', data: INITIAL_COMPANY_SETTINGS }
   ]),
-  Notification: new InMemoryCollection(INITIAL_NOTIFICATIONS)
+  Notification: new InMemoryCollection(INITIAL_NOTIFICATIONS),
+  WhatsAppAccount: new InMemoryCollection([])
 };
 
 // Model proxy: routes dynamically to real Mongoose when connected (readyState === 1),
@@ -549,6 +615,7 @@ export const KnowledgeBase = createModelProxy(RealKnowledgeBase, 'KnowledgeBase'
 export const KnowledgeGap = createModelProxy(RealKnowledgeGap, 'KnowledgeGap');
 export const Setting = createModelProxy(RealSetting, 'Setting');
 export const Notification = createModelProxy(RealNotification, 'Notification');
+export const WhatsAppAccount = createModelProxy(RealWhatsAppAccount, 'WhatsAppAccount');
 
 export async function purgeLegacyFakeDataAndEnsureDefaults() {
   try {
@@ -576,9 +643,33 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       }
     }
 
+    // Remove any unverified WhatsAppAccount records that do not have a real accessToken
+    const allWaAccounts = await WhatsAppAccount.find({});
+    let hasVerifiedAccount = false;
+    for (const acc of allWaAccounts) {
+      if (!acc.accessToken || acc.connectionStatus !== 'CONNECTED') {
+        await WhatsAppAccount.findOneAndDelete({ id: acc.id });
+      } else {
+        hasVerifiedAccount = true;
+      }
+    }
+
     const existingWa = await Setting.findOne({ type: 'whatsappSettings' });
     if (!existingWa) {
-      await Setting.create({ type: 'whatsappSettings', data: initialWhatsAppSettings });
+      await Setting.create({ type: 'whatsappSettings', data: INITIAL_WHATSAPP_SETTINGS });
+    } else if (!hasVerifiedAccount && existingWa.data?.isConnected) {
+      await Setting.findOneAndUpdate(
+        { type: 'whatsappSettings' },
+        {
+          $set: {
+            'data.phoneNumberId': '',
+            'data.businessAccountId': '',
+            'data.displayPhoneNumber': '',
+            'data.isConnected': false,
+            'data.lastWebhookAt': 'Awaiting connection'
+          }
+        }
+      );
     }
 
     const existingAi = await Setting.findOne({ type: 'aiSettings' });

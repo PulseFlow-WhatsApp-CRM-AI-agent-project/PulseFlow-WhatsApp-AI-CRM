@@ -767,6 +767,7 @@ export const WhatsAppInboxPage = () => {
 
             const isCustomer = msg.senderType === 'CUSTOMER';
             const isAI = msg.senderType === 'AI';
+            const isMobileEcho = msg.senderType === 'BUSINESS_MOBILE_ECHO';
             const isInspecting = inspectedMsgId === msg.id;
 
             return (
@@ -798,6 +799,8 @@ export const WhatsAppInboxPage = () => {
                         ? `${msg.senderName} (Customer)`
                         : isAI
                         ? 'AI Assistant (Auto-Reply)'
+                        : isMobileEcho
+                        ? `${msg.senderName || 'WhatsApp Business App'} (Mobile Echo)`
                         : `${msg.senderName} (You)`}
                     </span>
 
