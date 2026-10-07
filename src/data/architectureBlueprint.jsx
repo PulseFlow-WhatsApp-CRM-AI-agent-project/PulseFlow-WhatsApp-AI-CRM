@@ -4,7 +4,7 @@ export const ARCHITECTURE_SECTIONS = [
     number: '01',
     title: 'Complete System Architecture',
     category: 'Core Infrastructure',
-    summary: 'End-to-end topology connecting Meta WhatsApp Cloud API, Express REST/Webhook gateway, Pluggable AI Service Layer, MongoDB Atlas, and optional n8n automation.'
+    summary: 'End-to-end topology connecting Meta WhatsApp Cloud API + Coexistence, Express REST/Webhook gateway, Pluggable AI Service Layer, and MongoDB Atlas with AES-256-GCM encrypted Admin configuration.'
   },
   {
     id: 'frontend-backend',
@@ -286,7 +286,7 @@ export const DEVELOPMENT_PHASES = [
   { phase: 7, name: 'AI Reply Engine & Knowledge Base RAG', status: 'PENDING', deliverables: 'OpenAI/Gemini service layer, structured JSON output, Knowledge Base injection, English/Malayalam/Manglish support.' },
   { phase: 8, name: 'AI Lead Qualification & Scoring (0–100)', status: 'PENDING', deliverables: 'Contextual lead scoring engine, configurable Cold/Warm/Qualified/Hot thresholds, auto-extraction of budget/timeline.' },
   { phase: 9, name: 'Human Handoff & Takeover System', status: 'PENDING', deliverables: 'Escalation detection, Take Over / Return to AI controls, CRM alert banners, agent assignment notifications.' },
-  { phase: 10, name: 'Follow-ups, Notifications & n8n Automation', status: 'PENDING', deliverables: 'Follow-up scheduler, overdue tracking, notification center, and outbound n8n webhook triggers.' },
+  { phase: 10, name: 'Follow-ups, Notifications & Encrypted Admin Config', status: 'PENDING', deliverables: 'Follow-up scheduler, overdue tracking, notification center, and AES-256-GCM encrypted Admin UI configuration.' },
   { phase: 11, name: 'Executive Analytics & Reporting', status: 'PENDING', deliverables: 'Real-time aggregation pipelines for conversion rate, lead source ROI, AI vs Human resolution, and score distribution.' },
   { phase: 12, name: 'Security Hardening, Testing & Production Optimization', status: 'PENDING', deliverables: 'Rate limiting, input sanitization, webhook HMAC verification, unit/integration test suite, production build.' }
 ];

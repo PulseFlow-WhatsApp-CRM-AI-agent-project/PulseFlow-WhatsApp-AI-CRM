@@ -464,12 +464,9 @@ export const INITIAL_WHATSAPP_SETTINGS = {
   phoneNumberId: '',
   businessAccountId: '',
   displayPhoneNumber: '',
-  verifyToken: 'pulseflow_webhook_2026_secure',
-  webhookUrl: 'http://localhost:3000/webhook',
+  webhookUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook',
   isConnected: false,
-  lastWebhookAt: 'Awaiting connection',
-  n8nEnabled: false,
-  n8nWebhookUrl: ''
+  lastWebhookAt: 'Awaiting connection'
 };
 
 export const INITIAL_COMPANY_SETTINGS = {

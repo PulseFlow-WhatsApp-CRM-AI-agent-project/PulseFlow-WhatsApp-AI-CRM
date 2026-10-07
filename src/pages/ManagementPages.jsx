@@ -484,12 +484,150 @@ export const TeamMembersPage = () => {
 
 /* 2. AI SETTINGS PAGE */
 export const AISettingsPage = () => {
-  const { aiSettings, updateAISettings } = useCRM();
+  const { aiSettings, updateAISettings, currentUser, authToken, pushToast } = useCRM();
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [formState, setFormState] = useState(aiSettings);
+  const [adminCfg, setAdminCfg] = useState(null);
+  const [geminiApiKeyInput, setGeminiApiKeyInput] = useState('');
+  const [openaiApiKeyInput, setOpenaiApiKeyInput] = useState('');
+  const [showGeminiKey, setShowGeminiKey] = useState(false);
+  const [showOpenaiKey, setShowOpenaiKey] = useState(false);
+  const [savingVault, setSavingVault] = useState(false);
+  const [testingAi, setTestingAi] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState(null);
 
-  const handleSave = (e) => {
+  const getAuthHeaders = () => {
+    let token = authToken || '';
+    if (!token && typeof window !== 'undefined') {
+      try {
+        token = localStorage.getItem('pulseflow_auth_token') || '';
+      } catch {
+        token = '';
+      }
+    }
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  };
+
+  const loadAdminAiVault = async () => {
+    if (!isAdmin) return;
+    try {
+      const res = await fetch('/api/admin/config', { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (res.ok && data?.config) {
+        setAdminCfg(data.config);
+      }
+    } catch (err) {
+      console.error('Failed to load Admin AI config:', err);
+    }
+  };
+
+  useEffect(() => {
+    loadAdminAiVault();
+  }, [isAdmin, authToken]);
+
+  const handleSave = async (e) => {
     e.preventDefault();
     updateAISettings(formState);
+    if (isAdmin) {
+      setSavingVault(true);
+      try {
+        const activeProvider =
+          String(formState.provider || '').toLowerCase() === 'openai' ? 'openai' : 'gemini';
+        const payload = {
+          aiProvider: activeProvider,
+          geminiModel:
+            activeProvider === 'gemini'
+              ? formState.model || adminCfg?.geminiModel || 'gemini-2.5-flash'
+              : adminCfg?.geminiModel || 'gemini-2.5-flash',
+          openaiModel:
+            activeProvider === 'openai'
+              ? formState.model || adminCfg?.openaiModel || 'gpt-4o-mini'
+              : adminCfg?.openaiModel || 'gpt-4o-mini'
+        };
+        if (geminiApiKeyInput.trim()) payload.geminiApiKey = geminiApiKeyInput.trim();
+        if (openaiApiKeyInput.trim()) payload.openaiApiKey = openaiApiKeyInput.trim();
+
+        const res = await fetch('/api/admin/config', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (res.ok && data?.config) {
+          setAdminCfg(data.config);
+          setGeminiApiKeyInput('');
+          setOpenaiApiKeyInput('');
+        }
+      } catch (err) {
+        console.error('Failed to save encrypted AI provider keys:', err);
+      } finally {
+        setSavingVault(false);
+      }
+    }
+  };
+
+  const handleClearAiKey = async (providerKey) => {
+    if (!isAdmin) return;
+    setSavingVault(true);
+    try {
+      const body =
+        providerKey === 'gemini' ? { clearGeminiApiKey: true } : { clearOpenaiApiKey: true };
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(body)
+      });
+      const data = await res.json();
+      if (res.ok && data?.config) {
+        setAdminCfg(data.config);
+        pushToast(
+          'Encrypted Key Cleared',
+          `Removed stored ${providerKey === 'gemini' ? 'Gemini' : 'OpenAI'} API key from MongoDB.`,
+          'warning'
+        );
+      }
+    } catch (err) {
+      pushToast('Clear Failed', err.message, 'danger');
+    } finally {
+      setSavingVault(false);
+    }
+  };
+
+  const handleTestAiProvider = async () => {
+    setTestingAi(true);
+    setAiTestResult(null);
+    try {
+      const activeProvider =
+        String(formState.provider || '').toLowerCase() === 'openai' ? 'openai' : 'gemini';
+      const res = await fetch('/api/ai/test', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ provider: activeProvider })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'AI provider verification failed.');
+      }
+      setAiTestResult({
+        ok: true,
+        provider: data.provider,
+        model: data.model,
+        reply: data.reply
+      });
+      pushToast(
+        'AI Provider Verified',
+        `Live response received from ${data.provider.toUpperCase()} (${data.model}).`,
+        'success'
+      );
+    } catch (err) {
+      setAiTestResult({ ok: false, error: err.message });
+      pushToast('AI Verification Error', err.message, 'danger');
+    } finally {
+      setTestingAi(false);
+    }
   };
 
   return (
@@ -646,6 +784,166 @@ export const AISettingsPage = () => {
                 <option value="MALAYALAM">Malayalam Preferred</option>
               </select>
             </div>
+          </div>
+
+          {/* Encrypted AI Provider API Keys (Admin-Only MongoDB AES-256-GCM Vault) */}
+          <div className="pt-3 border-t border-white/60 space-y-3">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+              <div className="flex items-center gap-2">
+                <Lock className="w-4 h-4 text-emerald-700" />
+                <span className="text-xs font-bold text-slate-900">
+                  Encrypted AI Provider API Keys (MongoDB AES-256-GCM)
+                </span>
+              </div>
+              {isAdmin && (
+                <button
+                  type="button"
+                  disabled={testingAi}
+                  onClick={handleTestAiProvider}
+                  className="px-3 py-1.5 rounded-xl bg-slate-900 hover:bg-slate-800 text-white text-[11px] font-semibold flex items-center gap-1.5 self-start sm:self-auto cursor-pointer"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>{testingAi ? 'Testing Live Provider...' : 'Verify Active AI Provider'}</span>
+                </button>
+              )}
+            </div>
+
+            {isAdmin ? (
+              <div className="grid grid-cols-1 gap-3">
+                <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-800">Google Gemini API Key</span>
+                    {adminCfg?.geminiApiKeyConfigured ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-300 text-emerald-900 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <span>Configured ({adminCfg.geminiApiKeyMasked || 'Encrypted'})</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-300 text-amber-900 text-[10px] font-bold">
+                        <span>Not Configured</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showGeminiKey ? 'text' : 'password'}
+                      value={geminiApiKeyInput}
+                      onChange={(e) => setGeminiApiKeyInput(e.target.value)}
+                      placeholder={
+                        adminCfg?.geminiApiKeyConfigured
+                          ? 'Enter new Gemini API key to rotate encrypted key...'
+                          : 'Paste Gemini API key (AIza...)'
+                      }
+                      autoComplete="new-password"
+                      className="w-full pl-3 pr-9 py-2 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowGeminiKey((p) => !p)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showGeminiKey ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span>Encrypted before saving in MongoDB. Never returned to browser.</span>
+                    {adminCfg?.geminiApiKeySource === 'MONGODB_ENCRYPTED' && (
+                      <button
+                        type="button"
+                        onClick={() => handleClearAiKey('gemini')}
+                        className="text-rose-600 hover:underline font-semibold cursor-pointer"
+                      >
+                        Clear DB Key
+                      </button>
+                    )}
+                  </div>
+                </div>
+
+                <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-bold text-slate-800">OpenAI API Key</span>
+                    {adminCfg?.openaiApiKeyConfigured ? (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-300 text-emerald-900 text-[10px] font-bold">
+                        <CheckCircle2 className="w-3 h-3 text-emerald-600" />
+                        <span>Configured ({adminCfg.openaiApiKeyMasked || 'Encrypted'})</span>
+                      </span>
+                    ) : (
+                      <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 border border-amber-300 text-amber-900 text-[10px] font-bold">
+                        <span>Not Configured</span>
+                      </span>
+                    )}
+                  </div>
+                  <div className="relative">
+                    <input
+                      type={showOpenaiKey ? 'text' : 'password'}
+                      value={openaiApiKeyInput}
+                      onChange={(e) => setOpenaiApiKeyInput(e.target.value)}
+                      placeholder={
+                        adminCfg?.openaiApiKeyConfigured
+                          ? 'Enter new OpenAI API key to rotate encrypted key...'
+                          : 'Paste OpenAI API key (sk-...)'
+                      }
+                      autoComplete="new-password"
+                      className="w-full pl-3 pr-9 py-2 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowOpenaiKey((p) => !p)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showOpenaiKey ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                  <div className="flex items-center justify-between text-[10px] text-slate-500">
+                    <span>Encrypted before saving in MongoDB. Never returned to browser.</span>
+                    {adminCfg?.openaiApiKeySource === 'MONGODB_ENCRYPTED' && (
+                      <button
+                        type="button"
+                        onClick={() => handleClearAiKey('openai')}
+                        className="text-rose-600 hover:underline font-semibold cursor-pointer"
+                      >
+                        Clear DB Key
+                      </button>
+                    )}
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <p className="text-[11px] text-slate-500">
+                AI API keys are encrypted in MongoDB with AES-256-GCM and restricted to Admin users.
+              </p>
+            )}
+
+            {aiTestResult && (
+              <div
+                className={`p-3 rounded-2xl border text-xs ${
+                  aiTestResult.ok
+                    ? 'bg-emerald-500/10 border-emerald-300 text-emerald-950'
+                    : 'bg-rose-500/15 border-rose-300 text-rose-900'
+                }`}
+              >
+                {aiTestResult.ok ? (
+                  <div>
+                    <span className="font-bold">
+                      Verified {aiTestResult.provider.toUpperCase()} ({aiTestResult.model}):
+                    </span>{' '}
+                    {aiTestResult.reply}
+                  </div>
+                ) : (
+                  <div>
+                    <span className="font-bold">Verification Failed:</span> {aiTestResult.error}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
         </div>
 
@@ -1008,12 +1306,30 @@ const ONBOARDING_FLOW_STEPS = [
 
 export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const navigate = useNavigate();
-  const { whatsappSettings, updateWhatsAppSettings, currentUser, authToken, pushToast } = useCRM();
+  const {
+    whatsappSettings,
+    updateWhatsAppSettings,
+    currentUser,
+    authToken,
+    pushToast,
+    setWhatsappOnboardingModalOpen
+  } = useCRM();
 
   const [configData, setConfigData] = useState(null);
   const [connection, setConnection] = useState(null);
   const [loadingConfig, setLoadingConfig] = useState(true);
   const [onboardingModalOpen, setOnboardingModalOpen] = useState(false);
+
+  useEffect(() => {
+    if (setWhatsappOnboardingModalOpen) {
+      setWhatsappOnboardingModalOpen(onboardingModalOpen);
+    }
+    return () => {
+      if (setWhatsappOnboardingModalOpen) {
+        setWhatsappOnboardingModalOpen(false);
+      }
+    };
+  }, [onboardingModalOpen, setWhatsappOnboardingModalOpen]);
   const [onboardingMode, setOnboardingMode] = useState('COEXISTENCE');
   const [onboardingStep, setOnboardingStep] = useState(0);
   const [isConnecting, setIsConnecting] = useState(false);
@@ -1021,13 +1337,12 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const [fbSdkLoaded, setFbSdkLoaded] = useState(false);
   const [onboardingError, setOnboardingError] = useState('');
 
-  // Editable Meta App ID & Embedded Signup Config ID (public SDK identifiers)
-  const [metaAppIdInput, setMetaAppIdInput] = useState(
-    import.meta.env.VITE_META_APP_ID || ''
-  );
-  const [configIdInput, setConfigIdInput] = useState(
-    import.meta.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID || ''
-  );
+  // Editable Meta App ID & Embedded Signup Config ID + write-only encrypted secrets
+  const [metaAppIdInput, setMetaAppIdInput] = useState('1420003542794708');
+  const [configIdInput, setConfigIdInput] = useState('');
+  const [metaAppSecretInput, setMetaAppSecretInput] = useState('');
+  const [verifyTokenInput, setVerifyTokenInput] = useState('');
+  const [showMetaSecret, setShowMetaSecret] = useState(false);
   const [savingMetaConfig, setSavingMetaConfig] = useState(false);
   const [showMetaRequirements, setShowMetaRequirements] = useState(false);
 
@@ -1067,10 +1382,10 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
       if (data.connection) {
         setConnection(data.connection);
       }
-      if (data.appId && !metaAppIdInput) {
+      if (data.appId) {
         setMetaAppIdInput(data.appId);
       }
-      if (data.configId && !configIdInput) {
+      if (data.configId) {
         setConfigIdInput(data.configId);
       }
     } catch (err) {
@@ -1267,27 +1582,31 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
     setSavingMetaConfig(true);
     setOnboardingError('');
     try {
+      const payload = {
+        metaAppId: metaAppIdInput.trim(),
+        embeddedSignupConfigId: configIdInput.trim()
+      };
+      if (metaAppSecretInput.trim()) {
+        payload.metaAppSecret = metaAppSecretInput.trim();
+      }
+      if (verifyTokenInput.trim()) {
+        payload.whatsappVerifyToken = verifyTokenInput.trim();
+      }
       const res = await fetch('/api/whatsapp/embedded-config', {
         method: 'POST',
         headers: getAuthHeaders(),
-        body: JSON.stringify({
-          metaAppId: metaAppIdInput.trim(),
-          embeddedSignupConfigId: configIdInput.trim()
-        })
+        body: JSON.stringify(payload)
       });
       const data = await res.json();
       if (!res.ok || !data.ok) {
         throw new Error(data.error || 'Failed to save Meta App configuration.');
       }
-      setConfigData((prev) => ({
-        ...(prev || {}),
-        appId: data.appId,
-        configId: data.configId,
-        sdkReadyToLaunch: data.sdkReadyToLaunch
-      }));
+      setMetaAppSecretInput('');
+      setVerifyTokenInput('');
+      await loadEmbeddedConfig();
       pushToast(
         'Meta Embedded Signup Config Saved',
-        'App ID and Configuration ID saved for Facebook Login for Business.',
+        'Meta App ID, Config ID, and encrypted secrets saved to MongoDB.',
         'success'
       );
     } catch (err) {
@@ -1708,45 +2027,115 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
               onSubmit={handleSaveMetaAppConfig}
               className="p-4 rounded-2xl bg-white/70 border border-white/90 space-y-3"
             >
-              <div className="font-bold text-slate-900">
-                Meta App & Embedded Signup Configuration IDs
+              <div className="flex items-center justify-between">
+                <div className="font-bold text-slate-900">
+                  Meta Embedded Signup & Encrypted Vault Config
+                </div>
+                <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-900 border border-emerald-300">
+                  AES-256-GCM MongoDB
+                </span>
               </div>
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Meta App ID (<code className="font-mono">META_APP_ID</code>)
+                    Meta App ID (<code className="font-mono">metaAppId</code>)
                   </label>
                   <input
                     type="text"
                     value={metaAppIdInput}
                     onChange={(e) => setMetaAppIdInput(e.target.value)}
-                    placeholder="Enter your Meta App ID"
+                    placeholder="1420003542794708"
                     className="w-full px-3 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
                   />
                 </div>
                 <div>
                   <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Config ID (<code className="font-mono">META_EMBEDDED_SIGNUP_CONFIG_ID</code>)
+                    Embedded Signup Config ID (<code className="font-mono">config_id</code>)
                   </label>
                   <input
                     type="text"
                     value={configIdInput}
                     onChange={(e) => setConfigIdInput(e.target.value)}
-                    placeholder="Enter your Embedded Signup Config ID"
+                    placeholder="Enter Meta Configuration ID"
+                    className="w-full px-3 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-1">
+                    <span>Meta App Secret (Encrypted)</span>
+                    <span
+                      className={`text-[10px] font-bold ${
+                        configData?.appSecretConfigured ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {configData?.appSecretConfigured
+                        ? `Set (${configData.metaAppSecretMasked || 'Encrypted'})`
+                        : 'Missing'}
+                    </span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showMetaSecret ? 'text' : 'password'}
+                      value={metaAppSecretInput}
+                      onChange={(e) => setMetaAppSecretInput(e.target.value)}
+                      placeholder={
+                        configData?.appSecretConfigured
+                          ? 'Enter new App Secret to rotate...'
+                          : 'Paste Meta App Secret'
+                      }
+                      autoComplete="new-password"
+                      className="w-full pl-3 pr-8 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowMetaSecret((p) => !p)}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showMetaSecret ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-semibold text-slate-600 mb-1">
+                    <span>Webhook Verify Token (Encrypted)</span>
+                    <span
+                      className={`text-[10px] font-bold ${
+                        configData?.verifyTokenConfigured ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {configData?.verifyTokenConfigured
+                        ? `Set (${configData.verifyTokenMasked || 'Encrypted'})`
+                        : 'Missing'}
+                    </span>
+                  </label>
+                  <input
+                    type="password"
+                    value={verifyTokenInput}
+                    onChange={(e) => setVerifyTokenInput(e.target.value)}
+                    placeholder={
+                      configData?.verifyTokenConfigured
+                        ? 'Enter new Verify Token to rotate...'
+                        : 'Set custom hub.verify_token'
+                    }
+                    autoComplete="new-password"
                     className="w-full px-3 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
                   />
                 </div>
               </div>
               <div className="flex items-center justify-between pt-1">
                 <span className="text-[11px] text-slate-500">
-                  App Secret & Access Tokens remain strictly on the backend server.
+                  Secrets are encrypted with AES-256-GCM in MongoDB and never sent to the browser.
                 </span>
                 <button
                   type="submit"
                   disabled={savingMetaConfig}
                   className="px-3.5 py-1.5 bg-slate-900 hover:bg-slate-800 text-white font-semibold rounded-xl cursor-pointer"
                 >
-                  {savingMetaConfig ? 'Saving...' : 'Save Meta IDs'}
+                  {savingMetaConfig ? 'Encrypting & Saving...' : 'Save Meta Config'}
                 </button>
               </div>
             </form>
@@ -1941,18 +2330,36 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
 
 /* 4B. WHATSAPP SETTINGS PAGE */
 export const WhatsAppSettingsPage = () => {
-  const { whatsappSettings, updateWhatsAppSettings, pushToast } = useCRM();
+  const { whatsappSettings, updateWhatsAppSettings, currentUser, authToken, pushToast } = useCRM();
+  const isAdmin = currentUser?.role === 'ADMIN';
   const [form, setForm] = useState({
     ...whatsappSettings,
     webhookUrl:
       typeof window !== 'undefined'
         ? `${window.location.origin}/webhook`
-        : whatsappSettings.webhookUrl
+        : whatsappSettings.webhookUrl || 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
   });
   const [copied, setCopied] = useState(false);
   const [liveStatus, setLiveStatus] = useState(null);
   const [checkingStatus, setCheckingStatus] = useState(false);
-  const [showAdvancedFallback, setShowAdvancedFallback] = useState(false);
+  const [showWebhookPanel, setShowWebhookPanel] = useState(false);
+  const [verifyTokenInput, setVerifyTokenInput] = useState('');
+  const [savingWebhook, setSavingWebhook] = useState(false);
+
+  const getAuthHeaders = () => {
+    let token = authToken || '';
+    if (!token && typeof window !== 'undefined') {
+      try {
+        token = localStorage.getItem('pulseflow_auth_token') || '';
+      } catch {
+        token = '';
+      }
+    }
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  };
 
   const checkLiveWhatsAppStatus = async (notify = false) => {
     setCheckingStatus(true);
@@ -1995,6 +2402,39 @@ export const WhatsAppSettingsPage = () => {
     setTimeout(() => setCopied(false), 1800);
   };
 
+  const handleSaveWebhook = async (e) => {
+    e.preventDefault();
+    updateWhatsAppSettings({ webhookUrl: form.webhookUrl });
+    if (isAdmin) {
+      setSavingWebhook(true);
+      try {
+        const payload = { webhookCallbackUrl: form.webhookUrl };
+        if (verifyTokenInput.trim()) {
+          payload.whatsappVerifyToken = verifyTokenInput.trim();
+        }
+        const res = await fetch('/api/admin/config', {
+          method: 'POST',
+          headers: getAuthHeaders(),
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok || !data.ok) {
+          throw new Error(data.error || 'Failed to save webhook configuration.');
+        }
+        setVerifyTokenInput('');
+        pushToast(
+          'Webhook Configuration Saved',
+          'Webhook endpoint and encrypted Verify Token saved to MongoDB.',
+          'success'
+        );
+      } catch (err) {
+        pushToast('Save Failed', err.message, 'danger');
+      } finally {
+        setSavingWebhook(false);
+      }
+    }
+  };
+
   return (
     <div className="p-4 lg:p-6 max-w-[1440px] mx-auto space-y-6">
       <div className="glass-panel rounded-3xl p-5 flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2015,11 +2455,11 @@ export const WhatsAppSettingsPage = () => {
           </button>
           <button
             type="button"
-            onClick={() => setShowAdvancedFallback((prev) => !prev)}
+            onClick={() => setShowWebhookPanel((prev) => !prev)}
             className="px-3.5 py-2 border border-white/80 bg-white/75 text-slate-700 text-xs font-semibold rounded-xl hover:bg-white cursor-pointer flex items-center gap-1"
           >
-            <span>Webhook & n8n Options</span>
-            {showAdvancedFallback ? (
+            <span>Webhook & Verify Token</span>
+            {showWebhookPanel ? (
               <ChevronUp className="w-3.5 h-3.5" />
             ) : (
               <ChevronDown className="w-3.5 h-3.5" />
@@ -2031,27 +2471,30 @@ export const WhatsAppSettingsPage = () => {
       {/* Primary WhatsApp Integration Onboarding & Connected Card */}
       <WhatsAppIntegrationSection />
 
-      {/* Expandable Webhook & External n8n Automation Configuration (Preserves all existing features without requiring manual IDs) */}
-      {showAdvancedFallback && (
-        <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs">
+      {/* Expandable Webhook Endpoint & Encrypted Verify Token Configuration */}
+      {showWebhookPanel && (
+        <form
+          onSubmit={handleSaveWebhook}
+          className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs"
+        >
           <div className="glass-panel rounded-3xl p-6 space-y-4">
             <div className="flex items-center justify-between pb-3 border-b border-white/60">
               <h2 className="text-sm font-bold text-slate-900">
-                Webhook Endpoint & Security Isolation
+                Webhook Callback Endpoint (GET & POST)
               </h2>
               <span className="font-semibold text-emerald-700">Webhook Active</span>
             </div>
 
             <div>
               <label className="block font-semibold text-slate-700 mb-1">
-                Webhook Callback Endpoint (GET & POST)
+                Public Webhook Callback URL
               </label>
               <div className="flex gap-2">
                 <input
                   type="text"
-                  readOnly
                   value={form.webhookUrl}
-                  className="flex-1 px-3.5 py-2 border border-white/85 rounded-xl bg-white/65 font-mono"
+                  onChange={(e) => setForm({ ...form, webhookUrl: e.target.value })}
+                  className="flex-1 px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 font-mono"
                 />
                 <button
                   type="button"
@@ -2071,56 +2514,50 @@ export const WhatsAppSettingsPage = () => {
             <div className="p-3.5 bg-white/60 border border-white/85 rounded-2xl text-slate-700 flex items-start gap-2">
               <ShieldCheck className="w-4 h-4 text-emerald-700 shrink-0 mt-0.5" />
               <span>
-                <strong>Zero Token Exposure:</strong> Access tokens and verify tokens are stored strictly on the backend server and are never displayed in the UI.
+                <strong>AES-256-GCM Encryption:</strong> Access tokens, App Secrets, and Webhook Verify Tokens are encrypted at rest in MongoDB and never exposed to the browser.
               </span>
             </div>
           </div>
 
           <div className="glass-panel rounded-3xl p-6 space-y-4">
-            <h2 className="text-sm font-bold text-slate-900">
-              External Automation & n8n Workflow Compatibility
-            </h2>
+            <div className="flex items-center justify-between pb-3 border-b border-white/60">
+              <h2 className="text-sm font-bold text-slate-900">
+                Encrypted Webhook Verify Token (<code className="font-mono">hub.verify_token</code>)
+              </h2>
+              <span className="text-[11px] font-mono text-emerald-700 font-bold">
+                MongoDB Encrypted
+              </span>
+            </div>
             <p className="text-slate-600 leading-relaxed">
-              Optionally forward qualified Hot Leads, Human Handoff escalations, and overdue Follow-up events to an external n8n webhook for custom notifications and external CRM workflows.
+              Set or rotate the verify token used by <code className="font-mono">GET /webhook</code> when Meta verifies your callback endpoint in the Meta App Dashboard.
             </p>
 
-            <div className="flex items-center justify-between py-2 border-b border-white/50">
-              <div>
-                <div className="font-semibold text-slate-900">Enable n8n Event Webhook Forwarding</div>
-                <div className="text-[11px] text-slate-600">
-                  Emits JSON events on lead.hot, conversation.handoff, and followup.due
-                </div>
-              </div>
-              <input
-                type="checkbox"
-                checked={form.n8nEnabled}
-                onChange={(e) => setForm({ ...form, n8nEnabled: e.target.checked })}
-                className="w-4 h-4 accent-emerald-600"
-              />
-            </div>
-
             <div>
-              <label className="block font-semibold text-slate-700 mb-1">n8n Webhook Target URL</label>
+              <label className="block font-semibold text-slate-700 mb-1">
+                New Webhook Verify Token (Write-Only)
+              </label>
               <input
-                type="url"
-                value={form.n8nWebhookUrl}
-                onChange={(e) => setForm({ ...form, n8nWebhookUrl: e.target.value })}
+                type="password"
+                value={verifyTokenInput}
+                onChange={(e) => setVerifyTokenInput(e.target.value)}
+                placeholder="Enter custom hub.verify_token (encrypted on save)"
+                autoComplete="new-password"
                 className="w-full px-3.5 py-2 border border-white/85 rounded-xl bg-white/80 font-mono"
               />
             </div>
 
             <div className="pt-1 flex justify-end">
               <button
-                type="button"
-                onClick={() => updateWhatsAppSettings(form)}
+                type="submit"
+                disabled={savingWebhook}
                 className="px-4 py-2 bg-slate-900 text-white font-semibold rounded-xl hover:bg-slate-800 flex items-center gap-1.5 cursor-pointer"
               >
                 <Save className="w-3.5 h-3.5" />
-                <span>Save Webhook Options</span>
+                <span>{savingWebhook ? 'Encrypting & Saving...' : 'Save Webhook Settings'}</span>
               </button>
             </div>
           </div>
-        </div>
+        </form>
       )}
     </div>
   );
@@ -2242,6 +2679,429 @@ export const CompanySettingsPage = () => {
         </div>
       </div>
     </div>
+  );
+};
+
+/* 5B. UNIFIED ADMIN SYSTEM & INTEGRATION CONFIGURATION VAULT (MongoDB AES-256-GCM) */
+export const AdminSystemConfigurationVault = () => {
+  const { currentUser, authToken, pushToast } = useCRM();
+  const isAdmin = currentUser?.role === 'ADMIN';
+
+  const [config, setConfig] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [saving, setSaving] = useState(false);
+  const [testingAi, setTestingAi] = useState(false);
+
+  // Public / non-secret fields
+  const [publicAppUrl, setPublicAppUrl] = useState(
+    'https://pulseflow-whatsapp-ai-crm-web.onrender.com'
+  );
+  const [webhookCallbackUrl, setWebhookCallbackUrl] = useState(
+    'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
+  );
+  const [metaAppId, setMetaAppId] = useState('1420003542794708');
+  const [embeddedSignupConfigId, setEmbeddedSignupConfigId] = useState('');
+  const [metaGraphApiVersion, setMetaGraphApiVersion] = useState('v21.0');
+  const [aiProvider, setAiProvider] = useState('gemini');
+  const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
+  const [openaiModel, setOpenaiModel] = useState('gpt-4o-mini');
+
+  // Write-only secret inputs (never populated from backend, cleared immediately after save)
+  const [metaAppSecret, setMetaAppSecret] = useState('');
+  const [whatsappVerifyToken, setWhatsappVerifyToken] = useState('');
+  const [geminiApiKey, setGeminiApiKey] = useState('');
+  const [openaiApiKey, setOpenaiApiKey] = useState('');
+
+  const getAuthHeaders = () => {
+    let token = authToken || '';
+    if (!token && typeof window !== 'undefined') {
+      try {
+        token = localStorage.getItem('pulseflow_auth_token') || '';
+      } catch {
+        token = '';
+      }
+    }
+    return {
+      'Content-Type': 'application/json',
+      ...(token ? { Authorization: `Bearer ${token}` } : {})
+    };
+  };
+
+  const loadVaultConfig = async () => {
+    if (!isAdmin) return;
+    setLoading(true);
+    try {
+      const res = await fetch('/api/admin/config', { headers: getAuthHeaders() });
+      const data = await res.json();
+      if (res.ok && data?.config) {
+        const cfg = data.config;
+        setConfig(cfg);
+        if (cfg.publicAppUrl) setPublicAppUrl(cfg.publicAppUrl);
+        if (cfg.webhookCallbackUrl) setWebhookCallbackUrl(cfg.webhookCallbackUrl);
+        if (cfg.metaAppId) setMetaAppId(cfg.metaAppId);
+        if (cfg.embeddedSignupConfigId !== undefined) {
+          setEmbeddedSignupConfigId(cfg.embeddedSignupConfigId);
+        }
+        if (cfg.metaGraphApiVersion) setMetaGraphApiVersion(cfg.metaGraphApiVersion);
+        if (cfg.aiProvider) setAiProvider(cfg.aiProvider);
+        if (cfg.geminiModel) setGeminiModel(cfg.geminiModel);
+        if (cfg.openaiModel) setOpenaiModel(cfg.openaiModel);
+      }
+    } catch (err) {
+      console.error('Failed to load Admin System Config:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadVaultConfig();
+  }, [isAdmin, authToken]);
+
+  if (!isAdmin) return null;
+
+  const handleSaveVault = async (e) => {
+    e.preventDefault();
+    setSaving(true);
+    try {
+      const payload = {
+        publicAppUrl: publicAppUrl.trim(),
+        webhookCallbackUrl: webhookCallbackUrl.trim(),
+        metaAppId: metaAppId.trim(),
+        embeddedSignupConfigId: embeddedSignupConfigId.trim(),
+        metaGraphApiVersion: metaGraphApiVersion.trim() || 'v21.0',
+        aiProvider,
+        geminiModel: geminiModel.trim() || 'gemini-2.5-flash',
+        openaiModel: openaiModel.trim() || 'gpt-4o-mini'
+      };
+      if (metaAppSecret.trim()) payload.metaAppSecret = metaAppSecret.trim();
+      if (whatsappVerifyToken.trim()) payload.whatsappVerifyToken = whatsappVerifyToken.trim();
+      if (geminiApiKey.trim()) payload.geminiApiKey = geminiApiKey.trim();
+      if (openaiApiKey.trim()) payload.openaiApiKey = openaiApiKey.trim();
+
+      const res = await fetch('/api/admin/config', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'Failed to save encrypted system configuration.');
+      }
+      setConfig(data.config);
+      setMetaAppSecret('');
+      setWhatsappVerifyToken('');
+      setGeminiApiKey('');
+      setOpenaiApiKey('');
+      pushToast(
+        'Encrypted Configuration Saved',
+        'Application settings and AES-256-GCM encrypted secrets stored in MongoDB.',
+        'success'
+      );
+    } catch (err) {
+      pushToast('Save Failed', err.message, 'danger');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleTestAi = async () => {
+    setTestingAi(true);
+    try {
+      const res = await fetch('/api/ai/test', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({ provider: aiProvider })
+      });
+      const data = await res.json();
+      if (!res.ok || !data.ok) {
+        throw new Error(data.error || 'AI provider test failed.');
+      }
+      pushToast(
+        'AI Provider Verified',
+        `${data.provider.toUpperCase()} (${data.model}): ${data.reply}`,
+        'success'
+      );
+    } catch (err) {
+      pushToast('AI Test Failed', err.message, 'danger');
+    } finally {
+      setTestingAi(false);
+    }
+  };
+
+  return (
+    <form
+      onSubmit={handleSaveVault}
+      className="glass-panel-strong rounded-3xl p-6 lg:p-7 border border-white/85 shadow-lg space-y-5 text-xs"
+    >
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-white/60">
+        <div>
+          <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-500/15 border border-emerald-300 text-emerald-900 text-[10px] font-mono font-bold mb-1">
+            <Lock className="w-3 h-3 text-emerald-700" />
+            <span>MongoDB AES-256-GCM Encrypted Configuration Vault</span>
+          </div>
+          <h2 className="text-base sm:text-lg font-bold text-slate-900">
+            Admin System & Integration Settings
+          </h2>
+          <p className="text-xs text-slate-600">
+            Manage Meta Embedded Signup, Webhook Verify Token, and Gemini/OpenAI credentials from the Admin UI. Secrets are encrypted at rest in MongoDB and never sent to the browser.
+          </p>
+        </div>
+
+        <div className="flex items-center gap-2 self-start sm:self-auto">
+          <button
+            type="button"
+            disabled={testingAi}
+            onClick={handleTestAi}
+            className="px-3.5 py-2.5 border border-white/85 bg-white/80 hover:bg-white text-slate-800 font-semibold rounded-xl flex items-center gap-1.5 cursor-pointer"
+          >
+            <Sparkles className="w-3.5 h-3.5 text-emerald-600" />
+            <span>{testingAi ? 'Testing AI...' : 'Test AI Provider'}</span>
+          </button>
+
+          <button
+            type="submit"
+            disabled={saving || loading}
+            className="px-4 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-500 hover:from-emerald-500 hover:to-teal-400 text-white font-bold rounded-xl shadow-md shadow-emerald-600/20 flex items-center gap-1.5 cursor-pointer"
+          >
+            <Save className="w-3.5 h-3.5" />
+            <span>{saving ? 'Encrypting & Saving...' : 'Save Admin Configuration'}</span>
+          </button>
+        </div>
+      </div>
+
+      {/* Section 1: Public URLs & Meta Embedded Signup */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <label className="block font-bold text-slate-800">Public Application URL</label>
+          <input
+            type="url"
+            value={publicAppUrl}
+            onChange={(e) => setPublicAppUrl(e.target.value)}
+            placeholder="https://pulseflow-whatsapp-ai-crm-web.onrender.com"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+          <div className="text-[10px] text-slate-500">Render production base URL</div>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <label className="block font-bold text-slate-800">Webhook Callback URL</label>
+          <input
+            type="url"
+            value={webhookCallbackUrl}
+            onChange={(e) => setWebhookCallbackUrl(e.target.value)}
+            placeholder="https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+          <div className="text-[10px] text-slate-500">Meta WhatsApp Webhook endpoint</div>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <label className="block font-bold text-slate-800">Meta Graph API Version</label>
+          <input
+            type="text"
+            value={metaGraphApiVersion}
+            onChange={(e) => setMetaGraphApiVersion(e.target.value)}
+            placeholder="v21.0"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+          <div className="text-[10px] text-slate-500">Used for Embedded Signup & Cloud API</div>
+        </div>
+      </div>
+
+      {/* Section 2: Meta App Credentials (App ID, Config ID, Encrypted Secret & Verify Token) */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">Meta App ID</label>
+            <span className="text-[10px] font-mono text-emerald-700 font-semibold">Public SDK</span>
+          </div>
+          <input
+            type="text"
+            value={metaAppId}
+            onChange={(e) => setMetaAppId(e.target.value)}
+            placeholder="1420003542794708"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">Embedded Signup Config ID</label>
+            <span
+              className={`text-[10px] font-bold ${
+                embeddedSignupConfigId ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {embeddedSignupConfigId ? 'Configured' : 'Required'}
+            </span>
+          </div>
+          <input
+            type="text"
+            value={embeddedSignupConfigId}
+            onChange={(e) => setEmbeddedSignupConfigId(e.target.value)}
+            placeholder="Enter Meta Configuration ID"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">Meta App Secret</label>
+            <span
+              className={`text-[10px] font-bold ${
+                config?.metaAppSecretConfigured ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {config?.metaAppSecretConfigured
+                ? `Encrypted (${config.metaAppSecretMasked || 'Set'})`
+                : 'Not Set'}
+            </span>
+          </div>
+          <input
+            type="password"
+            value={metaAppSecret}
+            onChange={(e) => setMetaAppSecret(e.target.value)}
+            placeholder={
+              config?.metaAppSecretConfigured
+                ? 'Enter new App Secret to rotate...'
+                : 'Paste Meta App Secret (write-only)'
+            }
+            autoComplete="new-password"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">Webhook Verify Token</label>
+            <span
+              className={`text-[10px] font-bold ${
+                config?.whatsappVerifyTokenConfigured ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {config?.whatsappVerifyTokenConfigured
+                ? `Encrypted (${config.whatsappVerifyTokenMasked || 'Set'})`
+                : 'Not Set'}
+            </span>
+          </div>
+          <input
+            type="password"
+            value={whatsappVerifyToken}
+            onChange={(e) => setWhatsappVerifyToken(e.target.value)}
+            placeholder={
+              config?.whatsappVerifyTokenConfigured
+                ? 'Enter new Verify Token to rotate...'
+                : 'Set hub.verify_token (write-only)'
+            }
+            autoComplete="new-password"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Section 3: AI Provider & Encrypted API Keys */}
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <label className="block font-bold text-slate-800">Active AI Provider</label>
+          <select
+            value={aiProvider}
+            onChange={(e) => setAiProvider(e.target.value)}
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-semibold text-xs"
+          >
+            <option value="gemini">Google Gemini (Primary)</option>
+            <option value="openai">OpenAI (Service Layer)</option>
+          </select>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <label className="block font-bold text-slate-800">Gemini / OpenAI Models</label>
+          <div className="grid grid-cols-2 gap-1.5">
+            <input
+              type="text"
+              value={geminiModel}
+              onChange={(e) => setGeminiModel(e.target.value)}
+              placeholder="gemini-2.5-flash"
+              className="px-2.5 py-2 rounded-xl border border-white/90 bg-white font-mono text-[11px]"
+            />
+            <input
+              type="text"
+              value={openaiModel}
+              onChange={(e) => setOpenaiModel(e.target.value)}
+              placeholder="gpt-4o-mini"
+              className="px-2.5 py-2 rounded-xl border border-white/90 bg-white font-mono text-[11px]"
+            />
+          </div>
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">Gemini API Key</label>
+            <span
+              className={`text-[10px] font-bold ${
+                config?.geminiApiKeyConfigured ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {config?.geminiApiKeyConfigured
+                ? `Encrypted (${config.geminiApiKeyMasked || 'Set'})`
+                : 'Not Set'}
+            </span>
+          </div>
+          <input
+            type="password"
+            value={geminiApiKey}
+            onChange={(e) => setGeminiApiKey(e.target.value)}
+            placeholder={
+              config?.geminiApiKeyConfigured
+                ? 'Enter new Gemini key to rotate...'
+                : 'Paste Gemini API Key (write-only)'
+            }
+            autoComplete="new-password"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+
+        <div className="p-3.5 rounded-2xl bg-white/75 border border-white/90 space-y-1.5">
+          <div className="flex items-center justify-between">
+            <label className="font-bold text-slate-800">OpenAI API Key</label>
+            <span
+              className={`text-[10px] font-bold ${
+                config?.openaiApiKeyConfigured ? 'text-emerald-700' : 'text-amber-700'
+              }`}
+            >
+              {config?.openaiApiKeyConfigured
+                ? `Encrypted (${config.openaiApiKeyMasked || 'Set'})`
+                : 'Not Set'}
+            </span>
+          </div>
+          <input
+            type="password"
+            value={openaiApiKey}
+            onChange={(e) => setOpenaiApiKey(e.target.value)}
+            placeholder={
+              config?.openaiApiKeyConfigured
+                ? 'Enter new OpenAI key to rotate...'
+                : 'Paste OpenAI API Key (write-only)'
+            }
+            autoComplete="new-password"
+            className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Render ENV vs Encrypted MongoDB Architecture Boundary */}
+      <div className="p-3.5 rounded-2xl bg-slate-900/5 border border-slate-300/70 flex flex-col sm:flex-row sm:items-center justify-between gap-2 text-[11px] text-slate-700">
+        <div>
+          <strong>Render Infrastructure ENV Only:</strong>{' '}
+          <code className="font-mono">MONGODB_URI</code>,{' '}
+          <code className="font-mono">JWT_SECRET</code>,{' '}
+          <code className="font-mono">SETTINGS_ENCRYPTION_KEY</code>
+        </div>
+        <div>
+          <strong>MongoDB AES-256-GCM Encrypted:</strong> Meta App Secret, Verify Token, WABA Token, Gemini &amp; OpenAI Keys
+        </div>
+      </div>
+    </form>
   );
 };
 
@@ -2407,6 +3267,7 @@ export const ProfileSettingsPage = ({ mode }) => {
       </div>
 
       {mode !== 'profile' && <WhatsAppIntegrationSection compact />}
+      {mode !== 'profile' && <AdminSystemConfigurationVault />}
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 text-xs">
         {/* Personal Details Card (ADMIN ONLY) */}

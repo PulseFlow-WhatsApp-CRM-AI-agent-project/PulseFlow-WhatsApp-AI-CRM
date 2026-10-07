@@ -49,6 +49,7 @@ export const CRMWorkspaceLayout = ({ children }) => {
     hotLeadAlerts,
     hotLeadOverlayOpen,
     setHotLeadOverlayOpen,
+    whatsappOnboardingModalOpen,
     acknowledgeHotLeads,
     takeOverConversation,
     startOrOpenConversation,
@@ -69,6 +70,7 @@ export const CRMWorkspaceLayout = ({ children }) => {
 
   useEffect(() => {
     const handleKeyDown = (e) => {
+      if (whatsappOnboardingModalOpen) return;
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setQuickSearchOpen((prev) => !prev);
@@ -76,7 +78,7 @@ export const CRMWorkspaceLayout = ({ children }) => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, []);
+  }, [whatsappOnboardingModalOpen]);
 
   const totalConversationsCount = conversations.length;
   const unreadChatsCount = conversations.reduce((acc, c) => acc + (c.unreadCount || 0), 0);
@@ -280,33 +282,37 @@ export const CRMWorkspaceLayout = ({ children }) => {
           </Link>
         </div>
 
-        {/* Center: Pill Search Bar with ⌘K */}
-        <div className="flex-1 max-w-xl mx-auto hidden md:block">
-          <button
-            type="button"
-            onClick={() => setQuickSearchOpen(true)}
-            className="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-full bg-white/75 hover:bg-white/90 backdrop-blur-xl border border-white/90 shadow-[0_4px_20px_-4px_rgba(15,23,42,0.06)] text-xs text-slate-500 transition-all cursor-pointer"
-          >
-            <div className="flex items-center gap-2.5 truncate">
-              <Search className="w-4 h-4 text-slate-400 shrink-0" />
-              <span className="truncate">Search customers, messages, leads...</span>
-            </div>
-            <kbd className="px-2 py-0.5 text-[11px] font-mono font-medium text-slate-500 bg-slate-200/60 rounded-md shrink-0">
-              ⌘K
-            </kbd>
-          </button>
-        </div>
+        {/* Center: Pill Search Bar with ⌘K (Hidden when Meta WhatsApp Embedded Signup v3 popup is open) */}
+        {!whatsappOnboardingModalOpen && (
+          <div className="flex-1 max-w-xl mx-auto hidden md:block">
+            <button
+              type="button"
+              onClick={() => setQuickSearchOpen(true)}
+              className="w-full flex items-center justify-between gap-3 px-4 py-2.5 rounded-full bg-white/75 hover:bg-white/90 backdrop-blur-xl border border-white/90 shadow-[0_4px_20px_-4px_rgba(15,23,42,0.06)] text-xs text-slate-500 transition-all cursor-pointer"
+            >
+              <div className="flex items-center gap-2.5 truncate">
+                <Search className="w-4 h-4 text-slate-400 shrink-0" />
+                <span className="truncate">Search customers, messages, leads...</span>
+              </div>
+              <kbd className="px-2 py-0.5 text-[11px] font-mono font-medium text-slate-500 bg-slate-200/60 rounded-md shrink-0">
+                ⌘K
+              </kbd>
+            </button>
+          </div>
+        )}
 
         {/* Right: AI Status Pill, Hot Lead Alert, Notifications, User Profile Pill */}
         <div className="flex items-center gap-2.5">
-          <button
-            type="button"
-            onClick={() => setQuickSearchOpen(true)}
-            className="md:hidden p-2.5 rounded-full bg-white/80 border border-white/90 text-slate-700 shadow-xs cursor-pointer"
-            title="Search"
-          >
-            <Search className="w-4 h-4" />
-          </button>
+          {!whatsappOnboardingModalOpen && (
+            <button
+              type="button"
+              onClick={() => setQuickSearchOpen(true)}
+              className="md:hidden p-2.5 rounded-full bg-white/80 border border-white/90 text-slate-700 shadow-xs cursor-pointer"
+              title="Search"
+            >
+              <Search className="w-4 h-4" />
+            </button>
+          )}
 
           {/* AI Active Status Pill */}
           {isAdmin ? (

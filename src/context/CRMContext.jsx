@@ -60,6 +60,7 @@ export const CRMProvider = ({ children }) => {
   const [toasts, setToasts] = useState([]);
   const [hotLeadAlerts, setHotLeadAlerts] = useState([]);
   const [hotLeadOverlayOpen, setHotLeadOverlayOpen] = useState(false);
+  const [whatsappOnboardingModalOpen, setWhatsappOnboardingModalOpen] = useState(false);
   const seenHotTransitionsRef = useRef({});
 
   const pushToast = useCallback((title, description, variant = 'default') => {
@@ -1361,6 +1362,8 @@ export const CRMProvider = ({ children }) => {
         hotLeadAlerts,
         hotLeadOverlayOpen,
         setHotLeadOverlayOpen,
+        whatsappOnboardingModalOpen,
+        setWhatsappOnboardingModalOpen,
         fetchHotLeadAlerts,
         acknowledgeHotLeads,
         toasts,

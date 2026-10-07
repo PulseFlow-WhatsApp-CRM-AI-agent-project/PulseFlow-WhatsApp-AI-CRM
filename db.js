@@ -65,6 +65,61 @@ export function verifyPassword(password, storedHash, storedSalt) {
   }
 }
 
+// ============================================================================
+// AES-256-GCM SECRET ENCRYPTION FOR MONGODB APPLICATION CONFIGURATION
+// Encrypts sensitive secrets (Meta App Secret, Webhook Verify Token,
+// WhatsApp Access Tokens, Gemini API Key, OpenAI API Key) before storing in DB.
+// ============================================================================
+const ENCRYPTION_PREFIX = 'enc:v1:';
+
+function getEncryptionKey() {
+  const rawSecret =
+    process.env.SETTINGS_ENCRYPTION_KEY ||
+    process.env.ENCRYPTION_KEY ||
+    process.env.JWT_SECRET ||
+    'pulseflow-whatsapp-crm-jwt-secret-2026';
+  return crypto.createHash('sha256').update(String(rawSecret)).digest();
+}
+
+export function isEncryptedSecret(value) {
+  return typeof value === 'string' && value.startsWith(ENCRYPTION_PREFIX);
+}
+
+export function encryptSecret(plainText) {
+  if (!plainText || typeof plainText !== 'string') return '';
+  const trimmed = plainText.trim();
+  if (!trimmed) return '';
+  if (isEncryptedSecret(trimmed)) return trimmed;
+  const key = getEncryptionKey();
+  const iv = crypto.randomBytes(12);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  const encrypted = Buffer.concat([cipher.update(trimmed, 'utf8'), cipher.final()]);
+  const authTag = cipher.getAuthTag();
+  return `${ENCRYPTION_PREFIX}${iv.toString('hex')}:${authTag.toString('hex')}:${encrypted.toString('hex')}`;
+}
+
+export function decryptSecret(cipherText) {
+  if (!cipherText || typeof cipherText !== 'string') return '';
+  const trimmed = cipherText.trim();
+  if (!trimmed) return '';
+  if (!isEncryptedSecret(trimmed)) return trimmed;
+  try {
+    const payload = trimmed.slice(ENCRYPTION_PREFIX.length);
+    const [ivHex, authTagHex, encryptedHex] = payload.split(':');
+    if (!ivHex || !authTagHex || !encryptedHex) return '';
+    const key = getEncryptionKey();
+    const decipher = crypto.createDecipheriv('aes-256-gcm', key, Buffer.from(ivHex, 'hex'));
+    decipher.setAuthTag(Buffer.from(authTagHex, 'hex'));
+    const decrypted = Buffer.concat([
+      decipher.update(Buffer.from(encryptedHex, 'hex')),
+      decipher.final()
+    ]);
+    return decrypted.toString('utf8');
+  } catch {
+    return '';
+  }
+}
+
 const ContactSchema = new mongoose.Schema(
   {
     id: { type: String, required: true, unique: true, index: true },
@@ -181,7 +236,7 @@ const MessageSchema = new mongoose.Schema(
     whatsappMessageId: { type: String, default: '' },
     senderType: {
       type: String,
-      enum: ['CUSTOMER', 'AI', 'HUMAN_AGENT', 'SYSTEM'],
+      enum: ['CUSTOMER', 'AI', 'HUMAN_AGENT', 'SYSTEM', 'BUSINESS_MOBILE_ECHO'],
       required: true
     },
     senderName: { type: String, required: true },
@@ -299,6 +354,7 @@ const WhatsAppAccountSchema = new mongoose.Schema(
         'NOT_CONNECTED',
         'COEXISTENCE_PENDING',
         'COEXISTENCE_CONNECTED',
+        'CONNECTED',
         'NOT_ELIGIBLE',
         'DISCONNECTED',
         'ERROR'
@@ -328,6 +384,37 @@ const WhatsAppAccountSchema = new mongoose.Schema(
   { timestamps: true }
 );
 
+const SystemConfigSchema = new mongoose.Schema(
+  {
+    id: { type: String, required: true, unique: true, default: 'primary', index: true },
+    publicAppUrl: {
+      type: String,
+      default: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com'
+    },
+    frontendUrl: {
+      type: String,
+      default: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com'
+    },
+    metaAppId: { type: String, default: '1420003542794708' },
+    metaAppSecretEncrypted: { type: String, default: '' },
+    embeddedSignupConfigId: { type: String, default: '' },
+    whatsappVerifyTokenEncrypted: { type: String, default: '' },
+    whatsappApiVersion: { type: String, default: 'v21.0' },
+    aiProvider: {
+      type: String,
+      enum: ['GEMINI', 'OPENAI'],
+      default: 'GEMINI'
+    },
+    geminiModel: { type: String, default: 'gemini-3.5-flash-lite' },
+    geminiApiKeyEncrypted: { type: String, default: '' },
+    openaiModel: { type: String, default: 'gpt-4o-mini' },
+    openaiApiKeyEncrypted: { type: String, default: '' },
+    updatedBy: { type: String, default: '' },
+    updatedAt: { type: String, default: '' }
+  },
+  { timestamps: true }
+);
+
 // Real Mongoose Models
 const RealTeamMember =
   mongoose.models.TeamMember || mongoose.model('TeamMember', TeamMemberSchema);
@@ -347,6 +434,8 @@ const RealNotification =
 const RealWhatsAppAccount =
   mongoose.models.WhatsAppAccount ||
   mongoose.model('WhatsAppAccount', WhatsAppAccountSchema);
+const RealSystemConfig =
+  mongoose.models.SystemConfig || mongoose.model('SystemConfig', SystemConfigSchema);
 
 // ============================================================================
 // IN-MEMORY FALLBACK DATABASE ADAPTER
@@ -549,14 +638,32 @@ class InMemoryCollection {
   }
 }
 
-// Instantiate in-memory collections with default seed data
+// Instantiate in-memory collections with default seed data (no hardcoded WhatsApp IDs, tokens, or n8n fields)
 const initialWhatsAppSettings = {
   ...INITIAL_WHATSAPP_SETTINGS,
-  phoneNumberId: process.env.WHATSAPP_PHONE_NUMBER_ID || INITIAL_WHATSAPP_SETTINGS.phoneNumberId,
-  businessAccountId:
-    process.env.WHATSAPP_BUSINESS_ACCOUNT_ID || INITIAL_WHATSAPP_SETTINGS.businessAccountId,
-  verifyToken: process.env.WHATSAPP_VERIFY_TOKEN || INITIAL_WHATSAPP_SETTINGS.verifyToken,
-  webhookUrl: `${process.env.BACKEND_URL || 'http://localhost:3000'}/webhook`
+  phoneNumberId: '',
+  businessAccountId: '',
+  displayPhoneNumber: '',
+  isConnected: false,
+  webhookUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
+};
+
+export const INITIAL_SYSTEM_CONFIG = {
+  id: 'primary',
+  publicAppUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com',
+  frontendUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com',
+  metaAppId: '1420003542794708',
+  metaAppSecretEncrypted: '',
+  embeddedSignupConfigId: '',
+  whatsappVerifyTokenEncrypted: '',
+  whatsappApiVersion: 'v21.0',
+  aiProvider: 'GEMINI',
+  geminiModel: 'gemini-3.5-flash-lite',
+  geminiApiKeyEncrypted: '',
+  openaiModel: 'gpt-4o-mini',
+  openaiApiKeyEncrypted: '',
+  updatedBy: 'System',
+  updatedAt: new Date().toISOString()
 };
 
 const initialMessagesList = Object.values(INITIAL_MESSAGES).flat();
@@ -582,7 +689,8 @@ const inMemoryStores = {
     { type: 'companySettings', data: INITIAL_COMPANY_SETTINGS }
   ]),
   Notification: new InMemoryCollection(INITIAL_NOTIFICATIONS),
-  WhatsAppAccount: new InMemoryCollection([])
+  WhatsAppAccount: new InMemoryCollection([]),
+  SystemConfig: new InMemoryCollection([INITIAL_SYSTEM_CONFIG])
 };
 
 // Model proxy: routes dynamically to real Mongoose when connected (readyState === 1),
@@ -616,9 +724,38 @@ export const KnowledgeGap = createModelProxy(RealKnowledgeGap, 'KnowledgeGap');
 export const Setting = createModelProxy(RealSetting, 'Setting');
 export const Notification = createModelProxy(RealNotification, 'Notification');
 export const WhatsAppAccount = createModelProxy(RealWhatsAppAccount, 'WhatsAppAccount');
+export const SystemConfig = createModelProxy(RealSystemConfig, 'SystemConfig');
 
 export async function purgeLegacyFakeDataAndEnsureDefaults() {
   try {
+    // Ensure SystemConfig singleton exists and any stored secrets are encrypted at rest
+    let sysCfg = await SystemConfig.findOne({ id: 'primary' });
+    if (!sysCfg) {
+      await SystemConfig.create({ ...INITIAL_SYSTEM_CONFIG, updatedAt: new Date().toISOString() });
+    } else {
+      const sysUpdates = {};
+      if (sysCfg.metaAppSecretEncrypted && !isEncryptedSecret(sysCfg.metaAppSecretEncrypted)) {
+        sysUpdates.metaAppSecretEncrypted = encryptSecret(sysCfg.metaAppSecretEncrypted);
+      }
+      if (
+        sysCfg.whatsappVerifyTokenEncrypted &&
+        !isEncryptedSecret(sysCfg.whatsappVerifyTokenEncrypted)
+      ) {
+        sysUpdates.whatsappVerifyTokenEncrypted = encryptSecret(
+          sysCfg.whatsappVerifyTokenEncrypted
+        );
+      }
+      if (sysCfg.geminiApiKeyEncrypted && !isEncryptedSecret(sysCfg.geminiApiKeyEncrypted)) {
+        sysUpdates.geminiApiKeyEncrypted = encryptSecret(sysCfg.geminiApiKeyEncrypted);
+      }
+      if (sysCfg.openaiApiKeyEncrypted && !isEncryptedSecret(sysCfg.openaiApiKeyEncrypted)) {
+        sysUpdates.openaiApiKeyEncrypted = encryptSecret(sysCfg.openaiApiKeyEncrypted);
+      }
+      if (Object.keys(sysUpdates).length > 0) {
+        await SystemConfig.findOneAndUpdate({ id: 'primary' }, { $set: sysUpdates });
+      }
+    }
+
     const teamCount = await TeamMember.countDocuments();
     if (teamCount === 0) {
       await TeamMember.insertMany(seededTeamMembers);
@@ -643,7 +780,7 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       }
     }
 
-    // Remove any unverified WhatsAppAccount records that do not have a real accessToken
+    // Remove any unverified WhatsAppAccount records that do not have a real accessToken, and encrypt real accessTokens at rest
     const allWaAccounts = await WhatsAppAccount.find({});
     let hasVerifiedAccount = false;
     for (const acc of allWaAccounts) {
@@ -651,24 +788,34 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
         await WhatsAppAccount.findOneAndDelete({ id: acc.id });
       } else {
         hasVerifiedAccount = true;
+        if (!isEncryptedSecret(acc.accessToken)) {
+          await WhatsAppAccount.findOneAndUpdate(
+            { id: acc.id },
+            { $set: { accessToken: encryptSecret(acc.accessToken) } }
+          );
+        }
       }
     }
 
     const existingWa = await Setting.findOne({ type: 'whatsappSettings' });
     if (!existingWa) {
-      await Setting.create({ type: 'whatsappSettings', data: INITIAL_WHATSAPP_SETTINGS });
-    } else if (!hasVerifiedAccount && existingWa.data?.isConnected) {
+      await Setting.create({ type: 'whatsappSettings', data: initialWhatsAppSettings });
+    } else {
+      const cleanWaData = { ...(existingWa.data || {}) };
+      delete cleanWaData.verifyToken;
+      delete cleanWaData.n8nEnabled;
+      delete cleanWaData.n8nWebhookUrl;
+      delete cleanWaData.n8nForwardingEnabled;
+      if (!hasVerifiedAccount && cleanWaData.isConnected) {
+        cleanWaData.phoneNumberId = '';
+        cleanWaData.businessAccountId = '';
+        cleanWaData.displayPhoneNumber = '';
+        cleanWaData.isConnected = false;
+        cleanWaData.lastWebhookAt = 'Awaiting connection';
+      }
       await Setting.findOneAndUpdate(
         { type: 'whatsappSettings' },
-        {
-          $set: {
-            'data.phoneNumberId': '',
-            'data.businessAccountId': '',
-            'data.displayPhoneNumber': '',
-            'data.isConnected': false,
-            'data.lastWebhookAt': 'Awaiting connection'
-          }
-        }
+        { $set: { data: cleanWaData } }
       );
     }
 

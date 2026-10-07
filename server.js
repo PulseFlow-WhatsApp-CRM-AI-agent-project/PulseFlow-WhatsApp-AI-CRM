@@ -18,8 +18,13 @@ import mongoose, {
   Setting,
   Notification,
   WhatsAppAccount,
+  SystemConfig,
+  INITIAL_SYSTEM_CONFIG,
   hashPassword,
-  verifyPassword
+  verifyPassword,
+  encryptSecret,
+  decryptSecret,
+  isEncryptedSecret
 } from './db.js';
 import {
   INITIAL_AI_SETTINGS,
@@ -30,8 +35,6 @@ import {
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 const PORT = Number(process.env.PORT) || 3000;
-const VERIFY_TOKEN = process.env.WHATSAPP_VERIFY_TOKEN;
-const APP_SECRET = process.env.WHATSAPP_APP_SECRET;
 const IS_PRODUCTION = process.env.NODE_ENV === 'production' || process.env.RENDER === 'true';
 const DIST_DIR = path.join(__dirname, 'dist');
 const WEBHOOK_PATHS = new Set(['/webhook', '/api/webhooks/whatsapp', '/health']);
@@ -59,8 +62,9 @@ function safeCompare(a, b) {
   return crypto.timingSafeEqual(bufA, bufB);
 }
 
-function verifySignature(req) {
-  if (!APP_SECRET || APP_SECRET === 'replace_with_meta_app_secret_for_hmac_sha256') {
+function verifySignature(req, resolvedAppSecret = '') {
+  const secret = String(resolvedAppSecret || '').trim();
+  if (!secret || secret === 'replace_with_meta_app_secret_for_hmac_sha256') {
     return { ok: false, reason: 'app-secret-not-configured' };
   }
 
@@ -70,14 +74,14 @@ function verifySignature(req) {
   if (!req.rawBody || req.rawBody.length === 0) return { ok: false, reason: 'body-missing' };
 
   const expected =
-    'sha256=' + crypto.createHmac('sha256', APP_SECRET).update(req.rawBody).digest('hex');
+    'sha256=' + crypto.createHmac('sha256', secret).update(req.rawBody).digest('hex');
 
   return safeCompare(header, expected)
     ? { ok: true, reason: 'valid' }
     : { ok: false, reason: 'signature-mismatch' };
 }
 
-// Masking helpers so sensitive identifiers are masked in UI and access tokens are NEVER exposed
+// Masking helpers so sensitive identifiers are masked in UI and secrets/tokens are NEVER exposed
 function maskPhoneNumber(phone) {
   const raw = String(phone || '').trim();
   if (!raw) return '';
@@ -96,11 +100,31 @@ function maskIdentifier(id) {
   return `${'•'.repeat(Math.min(10, raw.length - 5))}${raw.slice(-5)}`;
 }
 
-// Helper to strip Mongoose _id / __v and sensitive password hash / token fields
+// Helper to strip Mongoose _id / __v and ALL sensitive password hash / token / encrypted secret fields
 const cleanDoc = (doc) => {
   if (!doc) return null;
   const obj = typeof doc.toObject === 'function' ? doc.toObject() : doc;
-  const { _id, __v, passwordHash, passwordSalt, password, accessToken, ...rest } = obj;
+  const {
+    _id,
+    __v,
+    passwordHash,
+    passwordSalt,
+    password,
+    accessToken,
+    metaAppSecretEncrypted,
+    whatsappVerifyTokenEncrypted,
+    geminiApiKeyEncrypted,
+    openaiApiKeyEncrypted,
+    metaAppSecret,
+    whatsappVerifyToken,
+    verifyToken,
+    geminiApiKey,
+    openaiApiKey,
+    n8nEnabled,
+    n8nWebhookUrl,
+    n8nForwardingEnabled,
+    ...rest
+  } = obj;
   return rest;
 };
 
@@ -196,13 +220,29 @@ async function requireAdmin(req, res, next) {
   }
 }
 
-// Resolve active WhatsApp Cloud API credentials strictly from verified connected WhatsAppAccount in MongoDB
-// NEVER uses hardcoded Phone Number ID, WABA ID, Business Name, or Test Number.
-async function getActiveWhatsAppCredentials() {
+// ============================================================================
+// RUNTIME SYSTEM & INTEGRATION CONFIGURATION RESOLVER (MONGODB + AES-256-GCM)
+// Reads encrypted SystemConfig from MongoDB first, decrypting secrets strictly
+// in server memory. Never exposes raw secrets to any client response.
+// ============================================================================
+async function getRuntimeSystemConfig(req = null) {
   try {
     await connectDB();
   } catch {
     // ignore db connection notice
+  }
+
+  let sysDoc = null;
+  try {
+    sysDoc = await SystemConfig.findOne({ id: 'primary' });
+    if (!sysDoc) {
+      sysDoc = await SystemConfig.create({
+        ...INITIAL_SYSTEM_CONFIG,
+        updatedAt: new Date().toISOString()
+      });
+    }
+  } catch {
+    sysDoc = { ...INITIAL_SYSTEM_CONFIG };
   }
 
   let waAccount = null;
@@ -212,14 +252,206 @@ async function getActiveWhatsAppCredentials() {
     // ignore
   }
 
-  let version = String(process.env.WHATSAPP_API_VERSION || 'v21.0')
+  // Decrypt secrets strictly in server memory
+  const dbMetaAppSecret = decryptSecret(sysDoc?.metaAppSecretEncrypted || '');
+  const dbVerifyToken = decryptSecret(sysDoc?.whatsappVerifyTokenEncrypted || '');
+  const dbGeminiApiKey = decryptSecret(sysDoc?.geminiApiKeyEncrypted || '');
+  const dbOpenaiApiKey = decryptSecret(sysDoc?.openaiApiKeyEncrypted || '');
+
+  // Optional ENV fallbacks if not yet saved in MongoDB
+  const envMetaSecretRaw = (
+    process.env.META_APP_SECRET ||
+    process.env.WHATSAPP_APP_SECRET ||
+    ''
+  ).trim();
+  const envMetaSecret =
+    envMetaSecretRaw && envMetaSecretRaw !== 'replace_with_meta_app_secret_for_hmac_sha256'
+      ? envMetaSecretRaw
+      : '';
+  const envVerifyToken = (process.env.WHATSAPP_VERIFY_TOKEN || '').trim();
+  const envGeminiKey =
+    process.env.GEMINI_API_KEY && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY'
+      ? String(process.env.GEMINI_API_KEY).trim()
+      : '';
+  const envOpenaiRaw = (process.env.OPENAI_API_KEY || '').trim();
+  const envOpenaiKey =
+    envOpenaiRaw && !envOpenaiRaw.startsWith('github_pat_') && !envOpenaiRaw.startsWith('ghp_')
+      ? envOpenaiRaw
+      : '';
+
+  const resolvedMetaAppSecret = dbMetaAppSecret || envMetaSecret;
+  const resolvedVerifyToken = dbVerifyToken || envVerifyToken;
+  const resolvedGeminiApiKey = dbGeminiApiKey || envGeminiKey;
+  const resolvedOpenaiApiKey = dbOpenaiApiKey || envOpenaiKey;
+
+  const metaAppId = String(
+    sysDoc?.metaAppId ||
+      waAccount?.metaAppId ||
+      process.env.META_APP_ID ||
+      process.env.VITE_META_APP_ID ||
+      '1420003542794708'
+  ).trim();
+
+  const embeddedSignupConfigId = String(
+    sysDoc?.embeddedSignupConfigId ||
+      waAccount?.embeddedSignupConfigId ||
+      process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ||
+      process.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID ||
+      ''
+  ).trim();
+
+  let whatsappApiVersion = String(
+    sysDoc?.whatsappApiVersion || process.env.WHATSAPP_API_VERSION || 'v21.0'
+  )
     .trim()
     .replace(/['"]/g, '')
     .replace(/^\/+|\/+$/g, '');
-  if (!version.startsWith('v')) version = `v${version}`;
+  if (!whatsappApiVersion.startsWith('v')) whatsappApiVersion = `v${whatsappApiVersion}`;
 
+  const fallbackOrigin = req
+    ? `${req.protocol}://${req.get('host')}`
+    : 'https://pulseflow-whatsapp-ai-crm-web.onrender.com';
+
+  const publicAppUrl = String(
+    sysDoc?.publicAppUrl ||
+      (process.env.BACKEND_URL || '').trim() ||
+      (process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL' ? process.env.APP_URL : '') ||
+      fallbackOrigin
+  )
+    .trim()
+    .replace(/\/+$/, '');
+
+  const frontendUrl = String(
+    sysDoc?.frontendUrl || (process.env.FRONTEND_URL || '').trim() || publicAppUrl
+  )
+    .trim()
+    .replace(/\/+$/, '');
+
+  const webhookUrl = `${publicAppUrl}/webhook`;
+
+  const aiProvider =
+    String(sysDoc?.aiProvider || process.env.AI_PROVIDER || 'GEMINI').toUpperCase() === 'OPENAI'
+      ? 'OPENAI'
+      : 'GEMINI';
+  const geminiModel = String(
+    sysDoc?.geminiModel || process.env.GEMINI_MODEL || 'gemini-3.5-flash-lite'
+  ).trim();
+  const openaiModel = String(
+    sysDoc?.openaiModel || process.env.OPENAI_MODEL || 'gpt-4o-mini'
+  ).trim();
+
+  return {
+    sysDoc,
+    publicAppUrl,
+    frontendUrl,
+    webhookUrl,
+    metaAppId,
+    embeddedSignupConfigId,
+    whatsappApiVersion,
+    // Decrypted secrets for server-side internal execution ONLY
+    metaAppSecret: resolvedMetaAppSecret,
+    whatsappVerifyToken: resolvedVerifyToken,
+    geminiApiKey: resolvedGeminiApiKey,
+    openaiApiKey: resolvedOpenaiApiKey,
+    // Secret presence flags
+    metaAppSecretConfigured: Boolean(resolvedMetaAppSecret),
+    metaAppSecretStoredInDb: Boolean(dbMetaAppSecret),
+    whatsappVerifyTokenConfigured: Boolean(resolvedVerifyToken),
+    whatsappVerifyTokenStoredInDb: Boolean(dbVerifyToken),
+    geminiApiKeyConfigured: Boolean(resolvedGeminiApiKey),
+    geminiApiKeyStoredInDb: Boolean(dbGeminiApiKey),
+    openaiApiKeyConfigured: Boolean(resolvedOpenaiApiKey),
+    openaiApiKeyStoredInDb: Boolean(dbOpenaiApiKey),
+    aiProvider,
+    geminiModel,
+    openaiModel,
+    updatedBy: sysDoc?.updatedBy || '',
+    updatedAt: sysDoc?.updatedAt || ''
+  };
+}
+
+// Build a 100% secret-free configuration object safe for React/browser responses
+function buildSanitizedSystemConfig(runtimeCfg) {
+  const sdkReadyToLaunch = Boolean(runtimeCfg.metaAppId && runtimeCfg.embeddedSignupConfigId);
+  const metaConfigurationPresent = Boolean(
+    runtimeCfg.metaAppId &&
+      runtimeCfg.embeddedSignupConfigId &&
+      runtimeCfg.metaAppSecretConfigured
+  );
+  const activeAiKeyConfigured =
+    runtimeCfg.aiProvider === 'OPENAI'
+      ? runtimeCfg.openaiApiKeyConfigured
+      : runtimeCfg.geminiApiKeyConfigured;
+  const anyAiKeyConfigured = Boolean(
+    runtimeCfg.geminiApiKeyConfigured || runtimeCfg.openaiApiKeyConfigured
+  );
+
+  const missingConfigVars = [];
+  if (!runtimeCfg.metaAppId) missingConfigVars.push('META_APP_ID');
+  if (!runtimeCfg.embeddedSignupConfigId)
+    missingConfigVars.push('META_EMBEDDED_SIGNUP_CONFIG_ID');
+  if (!runtimeCfg.metaAppSecretConfigured) missingConfigVars.push('META_APP_SECRET');
+
+  return {
+    publicAppUrl: runtimeCfg.publicAppUrl,
+    frontendUrl: runtimeCfg.frontendUrl,
+    webhookUrl: runtimeCfg.webhookUrl,
+    metaAppId: runtimeCfg.metaAppId,
+    embeddedSignupConfigId: runtimeCfg.embeddedSignupConfigId,
+    whatsappApiVersion: runtimeCfg.whatsappApiVersion,
+    metaAppSecretConfigured: Boolean(runtimeCfg.metaAppSecretConfigured),
+    metaAppSecretStoredInDb: Boolean(runtimeCfg.metaAppSecretStoredInDb),
+    metaAppSecretMasked: runtimeCfg.metaAppSecretConfigured ? '••••••••••••' : '',
+    whatsappVerifyTokenConfigured: Boolean(runtimeCfg.whatsappVerifyTokenConfigured),
+    whatsappVerifyTokenStoredInDb: Boolean(runtimeCfg.whatsappVerifyTokenStoredInDb),
+    whatsappVerifyTokenMasked: runtimeCfg.whatsappVerifyTokenConfigured ? '••••••••••••' : '',
+    metaConfigurationPresent,
+    sdkReadyToLaunch,
+    missingConfigVars,
+    configurationStatus: metaConfigurationPresent
+      ? 'READY'
+      : 'CODE COMPLETE — META CONFIGURATION REQUIRED',
+    aiProvider: runtimeCfg.aiProvider,
+    aiProviderConfigured: Boolean(activeAiKeyConfigured || anyAiKeyConfigured),
+    activeAiProviderConfigured: Boolean(activeAiKeyConfigured),
+    geminiModel: runtimeCfg.geminiModel,
+    geminiApiKeyConfigured: Boolean(runtimeCfg.geminiApiKeyConfigured),
+    geminiApiKeyStoredInDb: Boolean(runtimeCfg.geminiApiKeyStoredInDb),
+    geminiApiKeyMasked: runtimeCfg.geminiApiKeyConfigured ? '••••••••••••' : '',
+    openaiModel: runtimeCfg.openaiModel,
+    openaiApiKeyConfigured: Boolean(runtimeCfg.openaiApiKeyConfigured),
+    openaiApiKeyStoredInDb: Boolean(runtimeCfg.openaiApiKeyStoredInDb),
+    openaiApiKeyMasked: runtimeCfg.openaiApiKeyConfigured ? '••••••••••••' : '',
+    encryptionAlgorithm: 'AES-256-GCM',
+    infrastructureEnvStatus: {
+      mongodbConfigured: Boolean(process.env.MONGODB_URI),
+      jwtSecretConfigured: Boolean(process.env.JWT_SECRET),
+      encryptionKeyConfigured: Boolean(
+        process.env.SETTINGS_ENCRYPTION_KEY ||
+          process.env.ENCRYPTION_KEY ||
+          process.env.JWT_SECRET
+      )
+    },
+    updatedBy: runtimeCfg.updatedBy || '',
+    updatedAt: runtimeCfg.updatedAt || ''
+  };
+}
+
+// Resolve active WhatsApp Cloud API credentials strictly from verified connected WhatsAppAccount in MongoDB
+// Decrypts accessToken in server memory only. NEVER uses hardcoded Phone Number ID, WABA ID, Business Name, or Test Number.
+async function getActiveWhatsAppCredentials() {
+  const sysCfg = await getRuntimeSystemConfig();
+
+  let waAccount = null;
+  try {
+    waAccount = await WhatsAppAccount.findOne({ id: 'primary' });
+  } catch {
+    // ignore
+  }
+
+  const version = sysCfg.whatsappApiVersion || 'v21.0';
   const connectionStatus = waAccount?.connectionStatus || waAccount?.status || 'NOT_CONNECTED';
-  const dbToken = String(waAccount?.accessToken || '').trim();
+  const dbToken = decryptSecret(waAccount?.accessToken || '');
   const dbPhoneId = String(waAccount?.phoneNumberId || '').trim();
   const dbWabaId = String(waAccount?.wabaId || '').trim();
   const messagingActive = Boolean(waAccount?.messagingActive === true);
@@ -496,20 +728,19 @@ Analyze the customer message and return a JSON object with:
 
   const userPrompt = `Recent Conversation History:\n${historyText}\n\nLatest Customer Message:\n"${customerMessage}"\n\nRespond strictly with valid JSON.`;
 
-  const oaKey = (process.env.OPENAI_API_KEY || '').trim();
+  const sysCfg = await getRuntimeSystemConfig();
+  const oaKey = (sysCfg.openaiApiKey || process.env.OPENAI_API_KEY || '').trim();
   const isGithubPat = oaKey.startsWith('github_pat_') || oaKey.startsWith('ghp_');
-  const hasValidGeminiKey =
-    Boolean(process.env.GEMINI_API_KEY) && process.env.GEMINI_API_KEY !== 'MY_GEMINI_API_KEY';
+  const activeGeminiKey = sysCfg.geminiApiKey;
+  const hasValidGeminiKey = Boolean(activeGeminiKey);
 
-  const envProvider = process.env.AI_PROVIDER
-    ? String(process.env.AI_PROVIDER).toUpperCase()
-    : null;
+  const configuredProvider = String(
+    sysCfg.aiProvider || aiSettings.provider || process.env.AI_PROVIDER || 'GEMINI'
+  ).toUpperCase();
 
   // If OPENAI_API_KEY is a GitHub PAT rather than an sk- OpenAI key and Gemini is configured, route directly to Gemini
   const preferProvider =
-    isGithubPat && hasValidGeminiKey
-      ? 'GEMINI'
-      : String(aiSettings.provider || envProvider || 'GEMINI').toUpperCase();
+    isGithubPat && hasValidGeminiKey ? 'GEMINI' : configuredProvider;
 
   // Helper to run OpenAI / GitHub Models
   const tryOpenAIProvider = async () => {
@@ -520,9 +751,10 @@ Analyze the customer message and return a JSON object with:
         : 'https://api.openai.com/v1/chat/completions';
 
       const baseModel =
-        aiSettings.model && !aiSettings.model.startsWith('gemini')
+        sysCfg.openaiModel ||
+        (aiSettings.model && !aiSettings.model.startsWith('gemini')
           ? aiSettings.model
-          : process.env.OPENAI_MODEL || 'gpt-4o-mini';
+          : process.env.OPENAI_MODEL || 'gpt-4o-mini');
       const modelName =
         isGithubPat && !baseModel.includes('/') ? `openai/${baseModel}` : baseModel;
 
@@ -577,12 +809,12 @@ Analyze the customer message and return a JSON object with:
   // Helper to run Google Gemini API via @google/genai SDK with automatic model failover on 503
   const tryGeminiProvider = async () => {
     if (!hasValidGeminiKey) {
-      console.warn('[ai-service] GEMINI_API_KEY not configured, skipping Gemini provider');
+      console.warn('[ai-service] Gemini API key not configured, skipping Gemini provider');
       return null;
     }
 
     const ai = new GoogleGenAI({
-      apiKey: process.env.GEMINI_API_KEY,
+      apiKey: activeGeminiKey,
       httpOptions: {
         headers: {
           'User-Agent': 'aistudio-build'
@@ -591,6 +823,7 @@ Analyze the customer message and return a JSON object with:
     });
 
     const rawConfiguredModel =
+      sysCfg.geminiModel ||
       (aiSettings.model && aiSettings.model.startsWith('gemini') ? aiSettings.model : null) ||
       process.env.GEMINI_MODEL ||
       'gemini-3.5-flash-lite';
@@ -1429,7 +1662,8 @@ app.get('/health', (_req, res) => {
 });
 
 // Meta webhook verification handler (supports both /webhook and /api/webhooks/whatsapp)
-function handleWebhookVerify(req, res) {
+// Resolves verify token from encrypted MongoDB SystemConfig first, with ENV fallback
+async function handleWebhookVerify(req, res) {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
@@ -1438,7 +1672,10 @@ function handleWebhookVerify(req, res) {
     ? String(token[token.length - 1] ?? '')
     : String(token ?? '');
 
-  if (mode === 'subscribe' && VERIFY_TOKEN && safeCompare(tokenStr, VERIFY_TOKEN)) {
+  const sysCfg = await getRuntimeSystemConfig(req);
+  const activeVerifyToken = sysCfg.whatsappVerifyToken;
+
+  if (mode === 'subscribe' && activeVerifyToken && safeCompare(tokenStr, activeVerifyToken)) {
     return res.status(200).type('text/plain').send(String(challenge));
   }
 
@@ -1446,7 +1683,7 @@ function handleWebhookVerify(req, res) {
     '[webhook] verification rejected',
     JSON.stringify({
       mode: mode === 'subscribe' ? 'subscribe' : 'unexpected-mode',
-      verifyTokenConfigured: Boolean(VERIFY_TOKEN),
+      verifyTokenConfigured: Boolean(activeVerifyToken),
       challengeProvided: challenge !== undefined
     })
   );
@@ -1455,7 +1692,8 @@ function handleWebhookVerify(req, res) {
 }
 
 async function handleWebhookPost(req, res) {
-  const signature = verifySignature(req);
+  const sysCfg = await getRuntimeSystemConfig(req);
+  const signature = verifySignature(req, sysCfg.metaAppSecret);
   console.log(
     '[webhook] received',
     JSON.stringify({
@@ -1470,10 +1708,10 @@ async function handleWebhookPost(req, res) {
 
     if (unconfigured && !IS_PRODUCTION) {
       console.warn(
-        '[webhook] WHATSAPP_APP_SECRET not set — signature check skipped (non-production only)'
+        '[webhook] META_APP_SECRET not set — signature check skipped (non-production only)'
       );
     } else if (unconfigured) {
-      console.error('[webhook] WHATSAPP_APP_SECRET missing in production — rejecting request');
+      console.error('[webhook] META_APP_SECRET missing in production — rejecting request');
       return res.sendStatus(503);
     } else {
       console.warn('[webhook] rejected POST', JSON.stringify({ reason: signature.reason }));
@@ -1640,65 +1878,31 @@ function buildSanitizedWhatsAppConnection({
 // Public Meta Embedded Signup configuration endpoint (never exposes secrets or tokens)
 app.get('/api/whatsapp/embedded-config', async (req, res) => {
   try {
-    await connectDB();
+    const sysCfg = await getRuntimeSystemConfig(req);
+    const sanitizedSys = buildSanitizedSystemConfig(sysCfg);
     const waAccount = await WhatsAppAccount.findOne({ id: 'primary' });
     const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
 
-    const appId = (
-      process.env.META_APP_ID ||
-      process.env.VITE_META_APP_ID ||
-      waAccount?.metaAppId ||
-      ''
-    ).trim();
-
-    const configId = (
-      process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      process.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      waAccount?.embeddedSignupConfigId ||
-      ''
-    ).trim();
-
-    let version = String(process.env.WHATSAPP_API_VERSION || 'v21.0')
-      .trim()
-      .replace(/['"]/g, '')
-      .replace(/^\/+|\/+$/g, '');
-    if (!version.startsWith('v')) version = `v${version}`;
-
-    const appSecret = (process.env.META_APP_SECRET || process.env.WHATSAPP_APP_SECRET || '').trim();
-    const appSecretConfigured = Boolean(
-      appSecret && appSecret !== 'replace_with_meta_app_secret_for_hmac_sha256'
-    );
-    const verifyTokenConfigured = Boolean(process.env.WHATSAPP_VERIFY_TOKEN);
-
-    const publicOrigin =
-      process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
-        ? process.env.APP_URL
-        : `${req.protocol}://${req.get('host')}`;
-    const webhookUrl = `${publicOrigin}/webhook`;
-
-    const sdkReadyToLaunch = Boolean(appId && configId);
-    const missingConfigVars = [];
-    if (!appId) missingConfigVars.push('META_APP_ID');
-    if (!configId) missingConfigVars.push('META_EMBEDDED_SIGNUP_CONFIG_ID');
-    if (!appSecretConfigured) missingConfigVars.push('META_APP_SECRET');
-
     res.json({
-      appId,
-      configId,
-      apiVersion: version,
-      webhookUrl,
-      appSecretConfigured,
-      verifyTokenConfigured,
-      sdkReadyToLaunch,
-      missingConfigVars,
-      configurationStatus: sdkReadyToLaunch
-        ? 'READY'
-        : 'CODE COMPLETE — META CONFIGURATION REQUIRED',
+      appId: sanitizedSys.metaAppId,
+      configId: sanitizedSys.embeddedSignupConfigId,
+      apiVersion: sanitizedSys.whatsappApiVersion,
+      publicAppUrl: sanitizedSys.publicAppUrl,
+      frontendUrl: sanitizedSys.frontendUrl,
+      webhookUrl: sanitizedSys.webhookUrl,
+      appSecretConfigured: sanitizedSys.metaAppSecretConfigured,
+      appSecretStoredInDb: sanitizedSys.metaAppSecretStoredInDb,
+      verifyTokenConfigured: sanitizedSys.whatsappVerifyTokenConfigured,
+      verifyTokenStoredInDb: sanitizedSys.whatsappVerifyTokenStoredInDb,
+      sdkReadyToLaunch: sanitizedSys.sdkReadyToLaunch,
+      metaConfigurationPresent: sanitizedSys.metaConfigurationPresent,
+      missingConfigVars: sanitizedSys.missingConfigVars,
+      configurationStatus: sanitizedSys.configurationStatus,
       connection: buildSanitizedWhatsAppConnection({
         waAccount,
         aiSettings: aiSettingDoc?.data || INITIAL_AI_SETTINGS,
-        webhookUrl,
-        webhookReady: verifyTokenConfigured
+        webhookUrl: sanitizedSys.webhookUrl,
+        webhookReady: sanitizedSys.whatsappVerifyTokenConfigured
       })
     });
   } catch (err) {
@@ -1706,50 +1910,261 @@ app.get('/api/whatsapp/embedded-config', async (req, res) => {
   }
 });
 
-// Save public Meta App ID & Embedded Signup Configuration ID (Protected: Admin only)
+// Save Meta Embedded Signup & WhatsApp Configuration in MongoDB (Protected: Admin only)
+// Encrypts sensitive secrets (metaAppSecret, whatsappVerifyToken) using AES-256-GCM before storing.
 app.post('/api/whatsapp/embedded-config', requireAuth, requireAdmin, async (req, res) => {
   try {
     await connectDB();
     const metaAppId = String(req.body?.metaAppId || '').trim();
     const embeddedSignupConfigId = String(req.body?.embeddedSignupConfigId || '').trim();
+    const metaAppSecretPlain = String(req.body?.metaAppSecret || '').trim();
+    const verifyTokenPlain = String(
+      req.body?.whatsappVerifyToken || req.body?.verifyToken || ''
+    ).trim();
+    const publicAppUrlInput = String(req.body?.publicAppUrl || '').trim();
+    const whatsappApiVersionInput = String(req.body?.whatsappApiVersion || '').trim();
 
     if (!metaAppId || !embeddedSignupConfigId) {
       return res.status(400).json({
         ok: false,
         status: 'ERROR',
-        error: 'Both Meta App ID (META_APP_ID) and Embedded Signup Configuration ID (META_EMBEDDED_SIGNUP_CONFIG_ID) are required.'
+        error:
+          'Both Meta App ID (META_APP_ID) and Embedded Signup Configuration ID (META_EMBEDDED_SIGNUP_CONFIG_ID) are required.'
       });
     }
 
-    const updated = await WhatsAppAccount.findOneAndUpdate(
+    const nowIso = new Date().toISOString();
+    const sysUpdates = {
+      metaAppId,
+      embeddedSignupConfigId,
+      updatedBy: req.authUser?.email || req.authUser?.name || 'Admin',
+      updatedAt: nowIso
+    };
+    if (publicAppUrlInput) {
+      sysUpdates.publicAppUrl = publicAppUrlInput.replace(/\/+$/, '');
+    }
+    if (whatsappApiVersionInput) {
+      let ver = whatsappApiVersionInput.replace(/['"]/g, '').replace(/^\/+|\/+$/g, '');
+      if (!ver.startsWith('v')) ver = `v${ver}`;
+      sysUpdates.whatsappApiVersion = ver;
+    }
+    if (metaAppSecretPlain) {
+      sysUpdates.metaAppSecretEncrypted = encryptSecret(metaAppSecretPlain);
+    }
+    if (verifyTokenPlain) {
+      sysUpdates.whatsappVerifyTokenEncrypted = encryptSecret(verifyTokenPlain);
+    }
+
+    await SystemConfig.findOneAndUpdate(
+      { id: 'primary' },
+      { $set: sysUpdates },
+      { upsert: true, new: true }
+    );
+
+    await WhatsAppAccount.findOneAndUpdate(
       { id: 'primary' },
       {
         $set: {
           metaAppId,
           embeddedSignupConfigId,
-          updatedAt: new Date().toISOString()
+          updatedAt: nowIso
         }
       },
       { upsert: true, new: true }
     );
 
-    const resolvedAppId = (process.env.META_APP_ID || updated.metaAppId || '').trim();
-    const resolvedConfigId = (
-      process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      updated.embeddedSignupConfigId ||
-      ''
-    ).trim();
+    const updatedSysCfg = await getRuntimeSystemConfig(req);
+    const sanitizedSys = buildSanitizedSystemConfig(updatedSysCfg);
 
     res.json({
       ok: true,
-      appId: resolvedAppId,
-      configId: resolvedConfigId,
-      sdkReadyToLaunch: Boolean(resolvedAppId && resolvedConfigId)
+      appId: sanitizedSys.metaAppId,
+      configId: sanitizedSys.embeddedSignupConfigId,
+      apiVersion: sanitizedSys.whatsappApiVersion,
+      publicAppUrl: sanitizedSys.publicAppUrl,
+      webhookUrl: sanitizedSys.webhookUrl,
+      appSecretConfigured: sanitizedSys.metaAppSecretConfigured,
+      verifyTokenConfigured: sanitizedSys.whatsappVerifyTokenConfigured,
+      metaConfigurationPresent: sanitizedSys.metaConfigurationPresent,
+      sdkReadyToLaunch: sanitizedSys.sdkReadyToLaunch,
+      config: sanitizedSys
     });
   } catch (err) {
     res.status(500).json({ ok: false, status: 'ERROR', error: err.message });
   }
 });
+
+// ============================================================================
+// ADMIN SYSTEM & INTEGRATION CONFIGURATION ENDPOINTS (Protected: Admin only)
+// Stores application settings in MongoDB with AES-256-GCM encryption for secrets.
+// Never returns raw secrets to the client.
+// ============================================================================
+async function handleGetAdminConfig(req, res) {
+  try {
+    const runtimeCfg = await getRuntimeSystemConfig(req);
+    const sanitized = buildSanitizedSystemConfig(runtimeCfg);
+    return res.json({
+      ok: true,
+      config: sanitized
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+async function handleUpdateAdminConfig(req, res) {
+  try {
+    await connectDB();
+    const body = req.body || {};
+    const nowIso = new Date().toISOString();
+    const existing =
+      (await SystemConfig.findOne({ id: 'primary' })) || { ...INITIAL_SYSTEM_CONFIG };
+
+    const updates = {
+      updatedBy: req.authUser?.email || req.authUser?.name || 'Admin',
+      updatedAt: nowIso
+    };
+
+    if (typeof body.publicAppUrl === 'string' && body.publicAppUrl.trim()) {
+      updates.publicAppUrl = body.publicAppUrl.trim().replace(/\/+$/, '');
+    } else if (typeof body.appUrl === 'string' && body.appUrl.trim()) {
+      updates.publicAppUrl = body.appUrl.trim().replace(/\/+$/, '');
+    }
+
+    if (typeof body.frontendUrl === 'string' && body.frontendUrl.trim()) {
+      updates.frontendUrl = body.frontendUrl.trim().replace(/\/+$/, '');
+    }
+
+    if (typeof body.metaAppId === 'string') {
+      updates.metaAppId = body.metaAppId.trim();
+    }
+
+    if (typeof body.embeddedSignupConfigId === 'string') {
+      updates.embeddedSignupConfigId = body.embeddedSignupConfigId.trim();
+    }
+
+    if (typeof body.whatsappApiVersion === 'string' && body.whatsappApiVersion.trim()) {
+      let ver = body.whatsappApiVersion.trim().replace(/['"]/g, '').replace(/^\/+|\/+$/g, '');
+      if (!ver.startsWith('v')) ver = `v${ver}`;
+      updates.whatsappApiVersion = ver;
+    }
+
+    if (typeof body.aiProvider === 'string' && body.aiProvider.trim()) {
+      const prov = body.aiProvider.trim().toUpperCase();
+      if (prov === 'GEMINI' || prov === 'OPENAI') {
+        updates.aiProvider = prov;
+      }
+    }
+
+    if (typeof body.geminiModel === 'string' && body.geminiModel.trim()) {
+      updates.geminiModel = body.geminiModel.trim();
+    }
+
+    if (typeof body.openaiModel === 'string' && body.openaiModel.trim()) {
+      updates.openaiModel = body.openaiModel.trim();
+    }
+
+    // Encrypt sensitive secrets with AES-256-GCM before saving to MongoDB
+    if (body.clearMetaAppSecret === true) {
+      updates.metaAppSecretEncrypted = '';
+    } else if (typeof body.metaAppSecret === 'string' && body.metaAppSecret.trim()) {
+      updates.metaAppSecretEncrypted = encryptSecret(body.metaAppSecret.trim());
+    }
+
+    const rawVerifyTokenInput =
+      typeof body.whatsappVerifyToken === 'string'
+        ? body.whatsappVerifyToken
+        : typeof body.verifyToken === 'string'
+        ? body.verifyToken
+        : '';
+    if (body.clearWhatsappVerifyToken === true) {
+      updates.whatsappVerifyTokenEncrypted = '';
+    } else if (rawVerifyTokenInput && rawVerifyTokenInput.trim()) {
+      updates.whatsappVerifyTokenEncrypted = encryptSecret(rawVerifyTokenInput.trim());
+    }
+
+    if (body.clearGeminiApiKey === true) {
+      updates.geminiApiKeyEncrypted = '';
+    } else if (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim()) {
+      updates.geminiApiKeyEncrypted = encryptSecret(body.geminiApiKey.trim());
+    }
+
+    if (body.clearOpenaiApiKey === true) {
+      updates.openaiApiKeyEncrypted = '';
+    } else if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim()) {
+      updates.openaiApiKeyEncrypted = encryptSecret(body.openaiApiKey.trim());
+    }
+
+    await SystemConfig.findOneAndUpdate(
+      { id: 'primary' },
+      { $set: updates },
+      { upsert: true, new: true }
+    );
+
+    // Sync public Meta IDs to WhatsAppAccount
+    if (updates.metaAppId !== undefined || updates.embeddedSignupConfigId !== undefined) {
+      const waSync = { updatedAt: nowIso };
+      if (updates.metaAppId !== undefined) waSync.metaAppId = updates.metaAppId;
+      if (updates.embeddedSignupConfigId !== undefined) {
+        waSync.embeddedSignupConfigId = updates.embeddedSignupConfigId;
+      }
+      await WhatsAppAccount.findOneAndUpdate(
+        { id: 'primary' },
+        { $set: waSync },
+        { upsert: true }
+      );
+    }
+
+    // Sync webhookUrl to whatsappSettings (without any verifyToken or n8n fields)
+    const nextPublicUrl = updates.publicAppUrl || existing.publicAppUrl;
+    if (nextPublicUrl) {
+      await Setting.findOneAndUpdate(
+        { type: 'whatsappSettings' },
+        { $set: { 'data.webhookUrl': `${nextPublicUrl.replace(/\/+$/, '')}/webhook` } },
+        { upsert: true }
+      );
+    }
+
+    // Sync active AI provider & model to aiSettings
+    if (updates.aiProvider || updates.geminiModel || updates.openaiModel) {
+      const activeProv = updates.aiProvider || existing.aiProvider || 'GEMINI';
+      const activeModel =
+        activeProv === 'OPENAI'
+          ? updates.openaiModel || existing.openaiModel || 'gpt-4o-mini'
+          : updates.geminiModel || existing.geminiModel || 'gemini-3.5-flash-lite';
+      await Setting.findOneAndUpdate(
+        { type: 'aiSettings' },
+        {
+          $set: {
+            'data.provider': activeProv,
+            'data.model': activeModel
+          }
+        },
+        { upsert: true }
+      );
+    }
+
+    const runtimeCfg = await getRuntimeSystemConfig(req);
+    const sanitized = buildSanitizedSystemConfig(runtimeCfg);
+
+    return res.json({
+      ok: true,
+      config: sanitized
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, error: err.message });
+  }
+}
+
+app.get('/api/admin/config', requireAuth, requireAdmin, handleGetAdminConfig);
+app.post('/api/admin/config', requireAuth, requireAdmin, handleUpdateAdminConfig);
+app.patch('/api/admin/config', requireAuth, requireAdmin, handleUpdateAdminConfig);
+app.put('/api/admin/config', requireAuth, requireAdmin, handleUpdateAdminConfig);
+app.get('/api/settings/system', requireAuth, requireAdmin, handleGetAdminConfig);
+app.post('/api/settings/system', requireAuth, requireAdmin, handleUpdateAdminConfig);
+app.patch('/api/settings/system', requireAuth, requireAdmin, handleUpdateAdminConfig);
+app.get('/api/settings/integrations', requireAuth, requireAdmin, handleGetAdminConfig);
+app.patch('/api/settings/integrations', requireAuth, requireAdmin, handleUpdateAdminConfig);
 
 // Complete Meta WhatsApp Embedded Signup & Real Graph API Verification (Protected: Admin only)
 // Priority Rules:
@@ -1771,15 +2186,12 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
       redirectUri = ''
     } = req.body || {};
 
+    const sysCfg = await getRuntimeSystemConfig(req);
     const existingAccount = await WhatsAppAccount.findOne({ id: 'primary' });
     const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
     const aiSettings = aiSettingDoc?.data || INITIAL_AI_SETTINGS;
 
-    const publicOrigin =
-      process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
-        ? process.env.APP_URL
-        : `${req.protocol}://${req.get('host')}`;
-    const webhookUrl = `${publicOrigin}/webhook`;
+    const webhookUrl = sysCfg.webhookUrl;
 
     const failOnboarding = async (httpStatus, humanError, coexistenceErrStatus = 'NOT_ELIGIBLE') => {
       const errAccount = await WhatsAppAccount.findOneAndUpdate(
@@ -1807,7 +2219,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
           waAccount: errAccount,
           aiSettings,
           webhookUrl,
-          webhookReady: Boolean(process.env.WHATSAPP_VERIFY_TOKEN)
+          webhookReady: sysCfg.whatsappVerifyTokenConfigured
         })
       });
     };
@@ -1819,36 +2231,15 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
       );
     }
 
-    let version = String(process.env.WHATSAPP_API_VERSION || 'v21.0')
-      .trim()
-      .replace(/['"]/g, '')
-      .replace(/^\/+|\/+$/g, '');
-    if (!version.startsWith('v')) version = `v${version}`;
-
-    const appId = (
-      process.env.META_APP_ID ||
-      process.env.VITE_META_APP_ID ||
-      existingAccount?.metaAppId ||
-      ''
-    ).trim();
-
-    const configId = (
-      process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      process.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      existingAccount?.embeddedSignupConfigId ||
-      ''
-    ).trim();
-
-    const appSecret = (
-      process.env.META_APP_SECRET ||
-      process.env.WHATSAPP_APP_SECRET ||
-      ''
-    ).trim();
+    const version = sysCfg.whatsappApiVersion || 'v21.0';
+    const appId = sysCfg.metaAppId;
+    const configId = sysCfg.embeddedSignupConfigId;
+    const appSecret = sysCfg.metaAppSecret;
 
     if (!appId || !configId) {
       return await failOnboarding(
         400,
-        'Configuration Error: META_APP_ID and META_EMBEDDED_SIGNUP_CONFIG_ID are required to complete Meta Embedded Signup.'
+        'Configuration Error: META_APP_ID and META_EMBEDDED_SIGNUP_CONFIG_ID are required in Admin Settings to complete Meta Embedded Signup.'
       );
     }
 
@@ -1862,7 +2253,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
     if (!appSecret || appSecret === 'replace_with_meta_app_secret_for_hmac_sha256') {
       return await failOnboarding(
         400,
-        'Configuration Error: META_APP_SECRET is not configured on the server to exchange the Meta OAuth authorization code.'
+        'Configuration Error: META_APP_SECRET is not configured in Admin Settings to exchange the Meta OAuth authorization code.'
       );
     }
 
@@ -2212,7 +2603,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
           codeVerificationStatus: resolvedCodeStatus,
           platformType: resolvedPlatformType,
           isOnBizApp: resolvedIsOnBizApp,
-          accessToken: resolvedAccessToken,
+          accessToken: encryptSecret(resolvedAccessToken),
           tokenType: 'BEARER',
           webhookSubscribed: true,
           messagingActive: true,
@@ -2257,7 +2648,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
       waAccount: updatedAccount,
       aiSettings: updatedAiDoc?.data || { ...aiSettings, aiEnabled: true, autoReplyEnabled: true },
       webhookUrl,
-      webhookReady: Boolean(process.env.WHATSAPP_VERIFY_TOKEN)
+      webhookReady: sysCfg.whatsappVerifyTokenConfigured
     });
 
     res.json({
@@ -2278,7 +2669,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
 // IMPORTANT: Does NOT deregister or deactivate the WhatsApp Business mobile app number on Meta.
 app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res) => {
   try {
-    await connectDB();
+    const sysCfg = await getRuntimeSystemConfig(req);
     const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
     const nowIso = new Date().toISOString();
 
@@ -2314,11 +2705,7 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
       }
     );
 
-    const publicOrigin =
-      process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
-        ? process.env.APP_URL
-        : `${req.protocol}://${req.get('host')}`;
-    const webhookUrl = `${publicOrigin}/webhook`;
+    const webhookUrl = sysCfg.webhookUrl;
 
     res.json({
       ok: true,
@@ -2328,7 +2715,7 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
         waAccount: updatedAccount,
         aiSettings: aiSettingDoc?.data || INITIAL_AI_SETTINGS,
         webhookUrl,
-        webhookReady: Boolean(process.env.WHATSAPP_VERIFY_TOKEN)
+        webhookReady: sysCfg.whatsappVerifyTokenConfigured
       })
     });
   } catch (err) {
@@ -2337,7 +2724,7 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
 });
 
 app.get('/api/whatsapp/status', async (req, res) => {
-  await connectDB();
+  const sysCfg = await getRuntimeSystemConfig(req);
   const creds = await getActiveWhatsAppCredentials();
   const cleanToken = creds.token;
   const phoneId = creds.phoneNumberId;
@@ -2348,25 +2735,22 @@ app.get('/api/whatsapp/status', async (req, res) => {
   const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
   const aiSettings = aiSettingDoc?.data || INITIAL_AI_SETTINGS;
 
-  const verifyToken = process.env.WHATSAPP_VERIFY_TOKEN || '';
-
-  const publicOrigin =
-    process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL'
-      ? process.env.APP_URL
-      : `${req.protocol}://${req.get('host')}`;
-  const webhookUrl = `${publicOrigin}/webhook`;
+  const verifyTokenConfigured = sysCfg.whatsappVerifyTokenConfigured;
+  const appSecretConfigured = sysCfg.metaAppSecretConfigured;
+  const webhookUrl = sysCfg.webhookUrl;
 
   if (!creds.canSend || !cleanToken || !phoneId || !wabaId) {
     const connection = buildSanitizedWhatsAppConnection({
       waAccount,
       aiSettings,
       webhookUrl,
-      webhookReady: Boolean(verifyToken)
+      webhookReady: verifyTokenConfigured
     });
     return res.json({
-      webhookReady: Boolean(verifyToken),
+      webhookReady: verifyTokenConfigured,
       webhookUrl,
-      verifyTokenConfigured: Boolean(verifyToken),
+      verifyTokenConfigured,
+      appSecretConfigured,
       cloudApiConnected: false,
       phoneNumberId: '',
       businessAccountId: '',
@@ -2419,13 +2803,14 @@ app.get('/api/whatsapp/status', async (req, res) => {
         waAccount: errAccount,
         aiSettings,
         webhookUrl,
-        webhookReady: Boolean(verifyToken)
+        webhookReady: verifyTokenConfigured
       });
 
       return res.json({
-        webhookReady: Boolean(verifyToken),
+        webhookReady: verifyTokenConfigured,
         webhookUrl,
-        verifyTokenConfigured: Boolean(verifyToken),
+        verifyTokenConfigured,
+        appSecretConfigured,
         cloudApiConnected: false,
         phoneNumberId: '',
         businessAccountId: '',
@@ -2470,16 +2855,14 @@ app.get('/api/whatsapp/status', async (req, res) => {
       waAccount: updatedAccount,
       aiSettings,
       webhookUrl,
-      webhookReady: Boolean(verifyToken)
+      webhookReady: verifyTokenConfigured
     });
 
     return res.json({
-      webhookReady: Boolean(verifyToken),
+      webhookReady: verifyTokenConfigured,
       webhookUrl,
-      verifyTokenConfigured: Boolean(verifyToken),
-      appSecretConfigured: Boolean(
-        APP_SECRET && APP_SECRET !== 'replace_with_meta_app_secret_for_hmac_sha256'
-      ),
+      verifyTokenConfigured,
+      appSecretConfigured,
       cloudApiConnected: true,
       phoneNumberId: maskIdentifier(data.id || phoneId),
       businessAccountId: maskIdentifier(wabaId),
@@ -2494,12 +2877,13 @@ app.get('/api/whatsapp/status', async (req, res) => {
       waAccount,
       aiSettings,
       webhookUrl,
-      webhookReady: Boolean(verifyToken)
+      webhookReady: verifyTokenConfigured
     });
     return res.json({
-      webhookReady: Boolean(verifyToken),
+      webhookReady: verifyTokenConfigured,
       webhookUrl,
-      verifyTokenConfigured: Boolean(verifyToken),
+      verifyTokenConfigured,
+      appSecretConfigured,
       cloudApiConnected: false,
       phoneNumberId: '',
       businessAccountId: '',
@@ -2637,12 +3021,61 @@ app.get('/api/bootstrap', async (_req, res) => {
       }
     }
 
-    const aiSettings =
+    const sysCfg = await getRuntimeSystemConfig(_req);
+    const sanitizedSys = buildSanitizedSystemConfig(sysCfg);
+
+    const rawAiSettings =
       settingDocs.find((s) => s.type === 'aiSettings')?.data || INITIAL_AI_SETTINGS;
-    const whatsappSettings =
+    const rawWhatsappSettings =
       settingDocs.find((s) => s.type === 'whatsappSettings')?.data || INITIAL_WHATSAPP_SETTINGS;
     const companySettings =
       settingDocs.find((s) => s.type === 'companySettings')?.data || INITIAL_COMPANY_SETTINGS;
+
+    const {
+      geminiApiKey: _g,
+      openaiApiKey: _o,
+      apiKey: _a,
+      ...cleanAiSettings
+    } = rawAiSettings;
+
+    const aiSettings = {
+      ...cleanAiSettings,
+      provider: sanitizedSys.aiProvider || cleanAiSettings.provider || 'GEMINI',
+      model:
+        (sanitizedSys.aiProvider || cleanAiSettings.provider) === 'OPENAI'
+          ? sanitizedSys.openaiModel
+          : sanitizedSys.geminiModel,
+      geminiModel: sanitizedSys.geminiModel,
+      openaiModel: sanitizedSys.openaiModel,
+      geminiApiKeyConfigured: sanitizedSys.geminiApiKeyConfigured,
+      openaiApiKeyConfigured: sanitizedSys.openaiApiKeyConfigured,
+      aiProviderConfigured: sanitizedSys.aiProviderConfigured
+    };
+
+    const {
+      verifyToken: _vt,
+      n8nEnabled: _n1,
+      n8nWebhookUrl: _n2,
+      n8nForwardingEnabled: _n3,
+      accessToken: _at,
+      metaAppSecret: _ms,
+      ...cleanWaSettings
+    } = rawWhatsappSettings;
+
+    const whatsappSettings = {
+      ...cleanWaSettings,
+      phoneNumberId: cleanWaSettings.isConnected ? maskIdentifier(cleanWaSettings.phoneNumberId) : '',
+      businessAccountId: cleanWaSettings.isConnected
+        ? maskIdentifier(cleanWaSettings.businessAccountId)
+        : '',
+      displayPhoneNumber: cleanWaSettings.isConnected
+        ? maskPhoneNumber(cleanWaSettings.displayPhoneNumber)
+        : '',
+      webhookUrl: sanitizedSys.webhookUrl,
+      verifyTokenConfigured: sanitizedSys.whatsappVerifyTokenConfigured,
+      appSecretConfigured: sanitizedSys.metaAppSecretConfigured,
+      metaConfigurationPresent: sanitizedSys.metaConfigurationPresent
+    };
 
     const strategicFindings = computeDynamicFindings(leads, contacts, conversations);
 
@@ -3828,6 +4261,7 @@ app.post('/api/knowledge-gaps/:id/resolve', requireAdmin, async (req, res) => {
 app.post('/api/ai/test', async (req, res) => {
   try {
     await connectDB();
+    const sysCfg = await getRuntimeSystemConfig(req);
     const message = String(req.body?.message || 'Hello').trim();
     const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
     const aiSettings = aiSettingDoc?.data || INITIAL_AI_SETTINGS;
@@ -3844,8 +4278,11 @@ app.post('/api/ai/test', async (req, res) => {
 
     res.json({
       ok: true,
-      configuredProvider: process.env.AI_PROVIDER || aiSettings.provider || 'GEMINI',
-      configuredGeminiModel: process.env.GEMINI_MODEL || aiSettings.model || 'gemini-3.5-flash-lite',
+      configuredProvider: sysCfg.aiProvider || aiSettings.provider || 'GEMINI',
+      configuredGeminiModel: sysCfg.geminiModel || aiSettings.model || 'gemini-3.5-flash-lite',
+      configuredOpenaiModel: sysCfg.openaiModel || 'gpt-4o-mini',
+      geminiApiKeyConfigured: sysCfg.geminiApiKeyConfigured,
+      openaiApiKeyConfigured: sysCfg.openaiApiKeyConfigured,
       providerUsed: result.providerUsed,
       modelUsed: result.modelUsed,
       input: message,
@@ -3859,8 +4296,82 @@ app.post('/api/ai/test', async (req, res) => {
 app.patch('/api/settings/:type', requireAdmin, async (req, res) => {
   try {
     const type = req.params.type;
+    if (type === 'systemConfig' || type === 'system' || type === 'integrations') {
+      return await handleUpdateAdminConfig(req, res);
+    }
+
+    const body = { ...(req.body || {}) };
+    const sysUpdates = {};
+    if (typeof body.geminiApiKey === 'string' && body.geminiApiKey.trim()) {
+      sysUpdates.geminiApiKeyEncrypted = encryptSecret(body.geminiApiKey.trim());
+    }
+    if (typeof body.openaiApiKey === 'string' && body.openaiApiKey.trim()) {
+      sysUpdates.openaiApiKeyEncrypted = encryptSecret(body.openaiApiKey.trim());
+    }
+    if (typeof body.metaAppSecret === 'string' && body.metaAppSecret.trim()) {
+      sysUpdates.metaAppSecretEncrypted = encryptSecret(body.metaAppSecret.trim());
+    }
+    if (typeof body.whatsappVerifyToken === 'string' && body.whatsappVerifyToken.trim()) {
+      sysUpdates.whatsappVerifyTokenEncrypted = encryptSecret(body.whatsappVerifyToken.trim());
+    }
+    if (typeof body.verifyToken === 'string' && body.verifyToken.trim()) {
+      sysUpdates.whatsappVerifyTokenEncrypted = encryptSecret(body.verifyToken.trim());
+    }
+
+    if (type === 'aiSettings') {
+      if (typeof body.provider === 'string' && body.provider.trim()) {
+        sysUpdates.aiProvider =
+          body.provider.trim().toUpperCase() === 'OPENAI' ? 'OPENAI' : 'GEMINI';
+      }
+      if (typeof body.model === 'string' && body.model.trim()) {
+        if (body.model.trim().startsWith('gemini')) {
+          sysUpdates.geminiModel = body.model.trim();
+        } else {
+          sysUpdates.openaiModel = body.model.trim();
+        }
+      }
+      if (typeof body.geminiModel === 'string' && body.geminiModel.trim()) {
+        sysUpdates.geminiModel = body.geminiModel.trim();
+      }
+      if (typeof body.openaiModel === 'string' && body.openaiModel.trim()) {
+        sysUpdates.openaiModel = body.openaiModel.trim();
+      }
+    }
+
+    if (Object.keys(sysUpdates).length > 0) {
+      sysUpdates.updatedBy = req.authUser?.email || req.authUser?.name || 'Admin';
+      sysUpdates.updatedAt = new Date().toISOString();
+      await SystemConfig.findOneAndUpdate(
+        { id: 'primary' },
+        { $set: sysUpdates },
+        { upsert: true }
+      );
+    }
+
+    // Never store raw secrets or removed n8n fields inside Setting documents
+    delete body.geminiApiKey;
+    delete body.openaiApiKey;
+    delete body.metaAppSecret;
+    delete body.whatsappVerifyToken;
+    delete body.verifyToken;
+    delete body.accessToken;
+    delete body.n8nEnabled;
+    delete body.n8nWebhookUrl;
+    delete body.n8nForwardingEnabled;
+
     const existing = await Setting.findOne({ type });
-    const mergedData = { ...(existing?.data || {}), ...req.body };
+    const existingClean = { ...(existing?.data || {}) };
+    delete existingClean.geminiApiKey;
+    delete existingClean.openaiApiKey;
+    delete existingClean.metaAppSecret;
+    delete existingClean.whatsappVerifyToken;
+    delete existingClean.verifyToken;
+    delete existingClean.accessToken;
+    delete existingClean.n8nEnabled;
+    delete existingClean.n8nWebhookUrl;
+    delete existingClean.n8nForwardingEnabled;
+
+    const mergedData = { ...existingClean, ...body };
 
     const updated = await Setting.findOneAndUpdate(
       { type },
@@ -3992,18 +4503,7 @@ async function startServer() {
     });
   }
 
-  const WEBHOOK_ENV_REQUIRED = ['WHATSAPP_VERIFY_TOKEN', 'WHATSAPP_APP_SECRET'];
-  const WEBHOOK_ENV_RESERVED = [
-    'WHATSAPP_ACCESS_TOKEN',
-    'WHATSAPP_PHONE_NUMBER_ID',
-    'WHATSAPP_BUSINESS_ACCOUNT_ID',
-    'WHATSAPP_API_VERSION',
-    'MONGODB_URI',
-    'MONGODB_DB_NAME',
-    'JWT_SECRET',
-    'GEMINI_API_KEY',
-    'GEMINI_MODEL'
-  ];
+  const INFRASTRUCTURE_ENV = ['MONGODB_URI', 'MONGODB_DB_NAME', 'JWT_SECRET', 'SETTINGS_ENCRYPTION_KEY'];
 
   app.listen(PORT, '0.0.0.0', async () => {
     console.log(
@@ -4012,15 +4512,14 @@ async function startServer() {
       })`
     );
 
-    const required = WEBHOOK_ENV_REQUIRED.map(
-      (n) => `${n}=${process.env[n] ? 'set' : 'MISSING'}`
-    );
-    console.log(`[server] webhook env — ${required.join(' | ')}`);
-
-    const reserved = WEBHOOK_ENV_RESERVED.map(
+    const infraStatus = INFRASTRUCTURE_ENV.map(
       (n) => `${n}=${process.env[n] ? 'set' : 'unset'}`
     );
-    console.log(`[server] reserved env — ${reserved.join(' | ')}`);
+    console.log(
+      `[server] infrastructure env — ${infraStatus.join(
+        ' | '
+      )} | app & integration secrets encrypted in MongoDB (AES-256-GCM)`
+    );
 
     try {
       await connectDB();

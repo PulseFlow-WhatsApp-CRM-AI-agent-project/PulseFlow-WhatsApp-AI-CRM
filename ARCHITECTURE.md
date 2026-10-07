@@ -5,18 +5,18 @@
 
 ## 1. Complete System Architecture
 
-PulseFlow CRM follows a modular, layered full-stack architecture separating the presentation client (React + Vite), the REST API & Webhook gateway (Node.js + Express), the pluggable AI Provider Service Layer (OpenAI Structured Outputs / Gemini JSON Schema), persistent document storage (MongoDB + Mongoose with an in-memory fallback adapter for local sandbox verification), and external event hooks (Meta WhatsApp Cloud API v21.0 + optional n8n automation webhooks).
+PulseFlow CRM follows a modular, layered full-stack architecture separating the presentation client (React + Vite), the REST API & Webhook gateway (Node.js + Express), the pluggable AI Provider Service Layer (OpenAI Structured Outputs / Gemini JSON Schema), persistent document storage (MongoDB + Mongoose with AES-256-GCM secret encryption and an in-memory fallback adapter for local sandbox verification), and external event hooks (Meta WhatsApp Cloud API v21.0 + Embedded Signup Coexistence).
 
 ```text
 +-----------------------------------------------------------------------------------+
 |                               EXTERNAL ECOSYSTEM                                  |
-|  [Customer WhatsApp App] <---> [Meta WhatsApp Cloud API v21.0]   [n8n Workflows]  |
-+-----------------------------------------+-------------------------------+---------+
-                                          |                               ^
-                     Webhook Events (POST)|        Outbound Messages      | Event Webhooks
-                     & Verification (GET) |        (Graph API POST)       | (Optional)
-                                          v                               |
-+-------------------------------------------------------------------------+---------+
+|  [Customer WhatsApp App] <---> [Meta WhatsApp Cloud API v21.0 + Coexistence]      |
++-----------------------------------------+-----------------------------------------+
+                                          |
+                     Webhook Events (POST)|        Outbound Messages
+                     & Verification (GET) |        (Graph API POST)
+                                          v
++-----------------------------------------------------------------------------------+
 |                           BACKEND SERVER (Node.js + Express)                      |
 |                                                                                   |
 |  +-----------------------------------------------------------------------------+  |
@@ -209,16 +209,19 @@ PulseFlow CRM follows a modular, layered full-stack architecture separating the 
 - `defaultLanguage`: Enum `['AUTO', 'ENGLISH', 'MALAYALAM', 'MANGLISH']` (default: `'AUTO'`)
 - `systemPrompt`: String
 
-### 4.10 `WhatsAppSettings`
+### 4.10 `WhatsAppSettings` & `SystemConfig`
 - `companyId`: ObjectId -> `Company` (unique)
 - `phoneNumberId`: String
 - `businessAccountId`: String
 - `displayPhoneNumber`: String
-- `webhookVerifyToken`: String
 - `isConnected`: Boolean (default: `false`)
 - `lastWebhookReceivedAt`: Date
-- `n8nForwardingEnabled`: Boolean (default: `false`)
-- `n8nWebhookUrl`: String
+- `metaAppId`: String
+- `embeddedSignupConfigId`: String
+- `metaAppSecretEncrypted`: String (AES-256-GCM encrypted)
+- `whatsappVerifyTokenEncrypted`: String (AES-256-GCM encrypted)
+- `geminiApiKeyEncrypted`: String (AES-256-GCM encrypted)
+- `openaiApiKeyEncrypted`: String (AES-256-GCM encrypted)
 
 ### 4.11 `Notification`
 - `companyId`: ObjectId -> `Company`
