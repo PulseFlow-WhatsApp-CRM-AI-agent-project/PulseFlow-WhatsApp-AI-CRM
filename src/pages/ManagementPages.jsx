@@ -1337,9 +1337,12 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const [fbSdkLoaded, setFbSdkLoaded] = useState(false);
   const [onboardingError, setOnboardingError] = useState('');
 
+  const DEFAULT_META_APP_ID = '1097762042867836';
+  const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
+
   // Editable Meta App ID & Embedded Signup Config ID + write-only encrypted secrets
-  const [metaAppIdInput, setMetaAppIdInput] = useState('1420003542794708');
-  const [configIdInput, setConfigIdInput] = useState('');
+  const [metaAppIdInput, setMetaAppIdInput] = useState(DEFAULT_META_APP_ID);
+  const [configIdInput, setConfigIdInput] = useState(DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID);
   const [metaAppSecretInput, setMetaAppSecretInput] = useState('');
   const [verifyTokenInput, setVerifyTokenInput] = useState('');
   const [showMetaSecret, setShowMetaSecret] = useState(false);
@@ -1382,12 +1385,16 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
       if (data.connection) {
         setConnection(data.connection);
       }
-      if (data.appId) {
-        setMetaAppIdInput(data.appId);
-      }
-      if (data.configId) {
-        setConfigIdInput(data.configId);
-      }
+      const resolvedAppId =
+        data.appId && data.appId !== '1420003542794708'
+          ? String(data.appId).trim()
+          : DEFAULT_META_APP_ID;
+      const resolvedConfigId =
+        data.configId && data.configId !== '47642322601105412835405203476567'
+          ? String(data.configId).trim()
+          : DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
+      setMetaAppIdInput(resolvedAppId);
+      setConfigIdInput(resolvedConfigId);
     } catch (err) {
       console.error('Failed to load WhatsApp embedded config:', err);
     } finally {
@@ -1401,7 +1408,9 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
 
   // Load official Facebook JS SDK when Meta App ID is available
   useEffect(() => {
-    const activeAppId = (metaAppIdInput || configData?.appId || '').trim();
+    const rawAppId = (metaAppIdInput || configData?.appId || DEFAULT_META_APP_ID).trim();
+    const activeAppId =
+      !rawAppId || rawAppId === '1420003542794708' ? DEFAULT_META_APP_ID : rawAppId;
     const apiVer = configData?.apiVersion || 'v21.0';
     if (!activeAppId || typeof window === 'undefined') return;
 
@@ -1620,8 +1629,19 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   // Launch official Meta Embedded Signup popup via FB.login (Never fakes or simulates onboarding)
   const handleLaunchMetaPopup = () => {
     setOnboardingError('');
-    const activeAppId = (metaAppIdInput || configData?.appId || '').trim();
-    const activeConfigId = (configIdInput || configData?.configId || '').trim();
+    const rawAppId = (metaAppIdInput || configData?.appId || DEFAULT_META_APP_ID).trim();
+    const rawConfigId = (
+      configIdInput ||
+      configData?.configId ||
+      DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+    ).trim();
+    const activeAppId =
+      !rawAppId || rawAppId === '1420003542794708' ? DEFAULT_META_APP_ID : rawAppId;
+    const activeConfigId =
+      !rawConfigId || rawConfigId === '47642322601105412835405203476567'
+        ? DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+        : rawConfigId;
+    const apiVer = configData?.apiVersion || 'v21.0';
 
     if (!activeAppId || !activeConfigId) {
       setOnboardingError(
@@ -1636,6 +1656,18 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
         'Facebook JS SDK (connect.facebook.net/en_US/sdk.js) is still loading or blocked by the browser. Ensure popups/scripts from facebook.com are allowed and try again.'
       );
       return;
+    }
+
+    // Re-initialize FB SDK immediately before FB.login so the OAuth URL strictly uses activeAppId (1097762042867836)
+    try {
+      window.FB.init({
+        appId: activeAppId,
+        autoLogAppEvents: true,
+        xfbml: true,
+        version: apiVer
+      });
+    } catch (err) {
+      console.warn('FB.init pre-login warning:', err);
     }
 
     setIsConnecting(true);
@@ -1737,8 +1769,20 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
     }
   };
 
-  const activeAppId = (metaAppIdInput || configData?.appId || '').trim();
-  const activeConfigId = (configIdInput || configData?.configId || '').trim();
+  const rawActiveAppId = (metaAppIdInput || configData?.appId || DEFAULT_META_APP_ID).trim();
+  const rawActiveConfigId = (
+    configIdInput ||
+    configData?.configId ||
+    DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+  ).trim();
+  const activeAppId =
+    !rawActiveAppId || rawActiveAppId === '1420003542794708'
+      ? DEFAULT_META_APP_ID
+      : rawActiveAppId;
+  const activeConfigId =
+    !rawActiveConfigId || rawActiveConfigId === '47642322601105412835405203476567'
+      ? DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+      : rawActiveConfigId;
   const metaConfigReady = Boolean(activeAppId && activeConfigId);
   const isConnected = Boolean(
     connection?.connected &&
@@ -2044,7 +2088,7 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
                     type="text"
                     value={metaAppIdInput}
                     onChange={(e) => setMetaAppIdInput(e.target.value)}
-                    placeholder="1420003542794708"
+                    placeholder="1097762042867836"
                     className="w-full px-3 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
                   />
                 </div>
@@ -2056,7 +2100,7 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
                     type="text"
                     value={configIdInput}
                     onChange={(e) => setConfigIdInput(e.target.value)}
-                    placeholder="Enter Meta Configuration ID"
+                    placeholder="1105412835405203"
                     className="w-full px-3 py-1.5 rounded-xl border border-white/90 bg-white/90 font-mono text-xs"
                   />
                 </div>
@@ -2699,8 +2743,8 @@ export const AdminSystemConfigurationVault = () => {
   const [webhookCallbackUrl, setWebhookCallbackUrl] = useState(
     'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
   );
-  const [metaAppId, setMetaAppId] = useState('1420003542794708');
-  const [embeddedSignupConfigId, setEmbeddedSignupConfigId] = useState('');
+  const [metaAppId, setMetaAppId] = useState('1097762042867836');
+  const [embeddedSignupConfigId, setEmbeddedSignupConfigId] = useState('1105412835405203');
   const [metaGraphApiVersion, setMetaGraphApiVersion] = useState('v21.0');
   const [aiProvider, setAiProvider] = useState('gemini');
   const [geminiModel, setGeminiModel] = useState('gemini-2.5-flash');
@@ -2738,9 +2782,18 @@ export const AdminSystemConfigurationVault = () => {
         setConfig(cfg);
         if (cfg.publicAppUrl) setPublicAppUrl(cfg.publicAppUrl);
         if (cfg.webhookCallbackUrl) setWebhookCallbackUrl(cfg.webhookCallbackUrl);
-        if (cfg.metaAppId) setMetaAppId(cfg.metaAppId);
-        if (cfg.embeddedSignupConfigId !== undefined) {
+        if (cfg.metaAppId && cfg.metaAppId !== '1420003542794708') {
+          setMetaAppId(cfg.metaAppId);
+        } else {
+          setMetaAppId('1097762042867836');
+        }
+        if (
+          cfg.embeddedSignupConfigId &&
+          cfg.embeddedSignupConfigId !== '47642322601105412835405203476567'
+        ) {
           setEmbeddedSignupConfigId(cfg.embeddedSignupConfigId);
+        } else {
+          setEmbeddedSignupConfigId('1105412835405203');
         }
         if (cfg.metaGraphApiVersion) setMetaGraphApiVersion(cfg.metaGraphApiVersion);
         if (cfg.aiProvider) setAiProvider(cfg.aiProvider);
@@ -2920,7 +2973,7 @@ export const AdminSystemConfigurationVault = () => {
             type="text"
             value={metaAppId}
             onChange={(e) => setMetaAppId(e.target.value)}
-            placeholder="1420003542794708"
+            placeholder="1097762042867836"
             className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
           />
         </div>
@@ -2940,7 +2993,7 @@ export const AdminSystemConfigurationVault = () => {
             type="text"
             value={embeddedSignupConfigId}
             onChange={(e) => setEmbeddedSignupConfigId(e.target.value)}
-            placeholder="Enter Meta Configuration ID"
+            placeholder="1105412835405203"
             className="w-full px-3 py-2 rounded-xl border border-white/90 bg-white font-mono text-xs"
           />
         </div>

@@ -395,9 +395,9 @@ const SystemConfigSchema = new mongoose.Schema(
       type: String,
       default: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com'
     },
-    metaAppId: { type: String, default: '1420003542794708' },
+    metaAppId: { type: String, default: '1097762042867836' },
     metaAppSecretEncrypted: { type: String, default: '' },
-    embeddedSignupConfigId: { type: String, default: '' },
+    embeddedSignupConfigId: { type: String, default: '1105412835405203' },
     whatsappVerifyTokenEncrypted: { type: String, default: '' },
     whatsappApiVersion: { type: String, default: 'v21.0' },
     aiProvider: {
@@ -648,13 +648,16 @@ const initialWhatsAppSettings = {
   webhookUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
 };
 
+export const DEFAULT_META_APP_ID = '1097762042867836';
+export const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
+
 export const INITIAL_SYSTEM_CONFIG = {
   id: 'primary',
   publicAppUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com',
   frontendUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com',
-  metaAppId: '1420003542794708',
+  metaAppId: DEFAULT_META_APP_ID,
   metaAppSecretEncrypted: '',
-  embeddedSignupConfigId: '',
+  embeddedSignupConfigId: DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID,
   whatsappVerifyTokenEncrypted: '',
   whatsappApiVersion: 'v21.0',
   aiProvider: 'GEMINI',
@@ -734,6 +737,12 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       await SystemConfig.create({ ...INITIAL_SYSTEM_CONFIG, updatedAt: new Date().toISOString() });
     } else {
       const sysUpdates = {};
+      if (sysCfg.metaAppId !== DEFAULT_META_APP_ID) {
+        sysUpdates.metaAppId = DEFAULT_META_APP_ID;
+      }
+      if (sysCfg.embeddedSignupConfigId !== DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID) {
+        sysUpdates.embeddedSignupConfigId = DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
+      }
       if (sysCfg.metaAppSecretEncrypted && !isEncryptedSecret(sysCfg.metaAppSecretEncrypted)) {
         sysUpdates.metaAppSecretEncrypted = encryptSecret(sysCfg.metaAppSecretEncrypted);
       }
@@ -788,11 +797,18 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
         await WhatsAppAccount.findOneAndDelete({ id: acc.id });
       } else {
         hasVerifiedAccount = true;
+        const accUpdates = {};
         if (!isEncryptedSecret(acc.accessToken)) {
-          await WhatsAppAccount.findOneAndUpdate(
-            { id: acc.id },
-            { $set: { accessToken: encryptSecret(acc.accessToken) } }
-          );
+          accUpdates.accessToken = encryptSecret(acc.accessToken);
+        }
+        if (acc.metaAppId !== DEFAULT_META_APP_ID) {
+          accUpdates.metaAppId = DEFAULT_META_APP_ID;
+        }
+        if (acc.embeddedSignupConfigId !== DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID) {
+          accUpdates.embeddedSignupConfigId = DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
+        }
+        if (Object.keys(accUpdates).length > 0) {
+          await WhatsAppAccount.findOneAndUpdate({ id: acc.id }, { $set: accUpdates });
         }
       }
     }

@@ -20,6 +20,8 @@ import mongoose, {
   WhatsAppAccount,
   SystemConfig,
   INITIAL_SYSTEM_CONFIG,
+  DEFAULT_META_APP_ID,
+  DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID,
   hashPassword,
   verifyPassword,
   encryptSecret,
@@ -284,21 +286,44 @@ async function getRuntimeSystemConfig(req = null) {
   const resolvedGeminiApiKey = dbGeminiApiKey || envGeminiKey;
   const resolvedOpenaiApiKey = dbOpenaiApiKey || envOpenaiKey;
 
-  const metaAppId = String(
+  const rawMetaAppId = String(
     sysDoc?.metaAppId ||
       waAccount?.metaAppId ||
       process.env.META_APP_ID ||
       process.env.VITE_META_APP_ID ||
-      '1420003542794708'
+      DEFAULT_META_APP_ID
   ).trim();
+  const metaAppId =
+    !rawMetaAppId || rawMetaAppId === '1420003542794708'
+      ? DEFAULT_META_APP_ID
+      : rawMetaAppId;
 
-  const embeddedSignupConfigId = String(
+  const rawConfigId = String(
     sysDoc?.embeddedSignupConfigId ||
       waAccount?.embeddedSignupConfigId ||
       process.env.META_EMBEDDED_SIGNUP_CONFIG_ID ||
       process.env.VITE_META_EMBEDDED_SIGNUP_CONFIG_ID ||
-      ''
+      DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
   ).trim();
+  const embeddedSignupConfigId =
+    !rawConfigId || rawConfigId === '47642322601105412835405203476567'
+      ? DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+      : rawConfigId;
+
+  if (
+    sysDoc &&
+    (sysDoc.metaAppId !== metaAppId || sysDoc.embeddedSignupConfigId !== embeddedSignupConfigId)
+  ) {
+    await SystemConfig.findOneAndUpdate(
+      { id: 'primary' },
+      {
+        $set: {
+          metaAppId,
+          embeddedSignupConfigId
+        }
+      }
+    ).catch(() => {});
+  }
 
   let whatsappApiVersion = String(
     sysDoc?.whatsappApiVersion || process.env.WHATSAPP_API_VERSION || 'v21.0'
@@ -1915,8 +1940,16 @@ app.get('/api/whatsapp/embedded-config', async (req, res) => {
 app.post('/api/whatsapp/embedded-config', requireAuth, requireAdmin, async (req, res) => {
   try {
     await connectDB();
-    const metaAppId = String(req.body?.metaAppId || '').trim();
-    const embeddedSignupConfigId = String(req.body?.embeddedSignupConfigId || '').trim();
+    const rawMetaAppId = String(req.body?.metaAppId || '').trim();
+    const rawConfigId = String(req.body?.embeddedSignupConfigId || '').trim();
+    const metaAppId =
+      !rawMetaAppId || rawMetaAppId === '1420003542794708'
+        ? DEFAULT_META_APP_ID
+        : rawMetaAppId;
+    const embeddedSignupConfigId =
+      !rawConfigId || rawConfigId === '47642322601105412835405203476567'
+        ? DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+        : rawConfigId;
     const metaAppSecretPlain = String(req.body?.metaAppSecret || '').trim();
     const verifyTokenPlain = String(
       req.body?.whatsappVerifyToken || req.body?.verifyToken || ''
@@ -2036,11 +2069,19 @@ async function handleUpdateAdminConfig(req, res) {
     }
 
     if (typeof body.metaAppId === 'string') {
-      updates.metaAppId = body.metaAppId.trim();
+      const trimmedAppId = body.metaAppId.trim();
+      updates.metaAppId =
+        !trimmedAppId || trimmedAppId === '1420003542794708'
+          ? DEFAULT_META_APP_ID
+          : trimmedAppId;
     }
 
     if (typeof body.embeddedSignupConfigId === 'string') {
-      updates.embeddedSignupConfigId = body.embeddedSignupConfigId.trim();
+      const trimmedCfgId = body.embeddedSignupConfigId.trim();
+      updates.embeddedSignupConfigId =
+        !trimmedCfgId || trimmedCfgId === '47642322601105412835405203476567'
+          ? DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID
+          : trimmedCfgId;
     }
 
     if (typeof body.whatsappApiVersion === 'string' && body.whatsappApiVersion.trim()) {
