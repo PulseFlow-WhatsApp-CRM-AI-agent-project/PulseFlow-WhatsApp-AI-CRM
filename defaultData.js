@@ -461,12 +461,13 @@ Your responsibilities:
 };
 
 export const INITIAL_WHATSAPP_SETTINGS = {
-  phoneNumberId: '',
-  businessAccountId: '',
-  displayPhoneNumber: '',
+  phoneNumberId: '1346163251921781',
+  businessAccountId: '1117283247416297',
+  displayPhoneNumber: '+1 (555) 639-1516',
+  metaAppId: '1640164817625713',
   webhookUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook',
   isConnected: false,
-  lastWebhookAt: 'Awaiting connection'
+  lastWebhookAt: 'Awaiting test token & webhook verification'
 };
 
 export const INITIAL_COMPANY_SETTINGS = {

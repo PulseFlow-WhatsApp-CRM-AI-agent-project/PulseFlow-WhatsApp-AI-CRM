@@ -1337,8 +1337,12 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const [fbSdkLoaded, setFbSdkLoaded] = useState(false);
   const [onboardingError, setOnboardingError] = useState('');
 
-  const DEFAULT_META_APP_ID = '1097762042867836';
+  const DEFAULT_META_APP_ID = '1640164817625713';
   const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
+  const TEST_PHONE_DISPLAY = '+1 (555) 639-1516';
+  const TEST_PHONE_NUMBER_ID = '1346163251921781';
+  const TEST_WABA_ID = '1117283247416297';
+  const PRODUCTION_WEBHOOK_URL = 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook';
 
   // Editable Meta App ID & Embedded Signup Config ID + write-only encrypted secrets
   const [metaAppIdInput, setMetaAppIdInput] = useState(DEFAULT_META_APP_ID);
@@ -1348,6 +1352,17 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const [showMetaSecret, setShowMetaSecret] = useState(false);
   const [savingMetaConfig, setSavingMetaConfig] = useState(false);
   const [showMetaRequirements, setShowMetaRequirements] = useState(false);
+
+  // Meta Official Test Number Restore & Live Verification state
+  const [testAccessTokenInput, setTestAccessTokenInput] = useState('');
+  const [showTestToken, setShowTestToken] = useState(false);
+  const [testRecipientPhoneInput, setTestRecipientPhoneInput] = useState('');
+  const [testMessageTextInput, setTestMessageTextInput] = useState(
+    'PulseFlow CRM Meta Test Number verification check'
+  );
+  const [verifyingTestSetup, setVerifyingTestSetup] = useState(false);
+  const [testDiagnostics, setTestDiagnostics] = useState(null);
+  const [testSetupMessage, setTestSetupMessage] = useState('');
 
   // Refs to coordinate WA_EMBEDDED_SIGNUP postMessage and FB.login OAuth code callback
   const embeddedSessionRef = useRef({
@@ -1752,20 +1767,77 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
         setConnection(data.connection);
       }
       updateWhatsAppSettings({
-        isConnected: false,
-        phoneNumberId: '',
-        businessAccountId: '',
-        displayPhoneNumber: ''
+        isConnected: false
       });
       pushToast(
         'WhatsApp Disconnected',
-        'Disconnected from PulseFlow CRM. Your WhatsApp Business mobile app was not deactivated or deregistered.',
+        'Disconnected from PulseFlow CRM. Test number metadata preserved and real number +91 7902931503 untouched.',
         'warning'
       );
     } catch (err) {
       pushToast('Disconnect Error', err.message, 'danger');
     } finally {
       setIsDisconnecting(false);
+    }
+  };
+
+  const handleRestoreAndVerifyTestNumber = async (e) => {
+    if (e) e.preventDefault();
+    setVerifyingTestSetup(true);
+    setOnboardingError('');
+    setTestSetupMessage('');
+    try {
+      const res = await fetch('/api/whatsapp/test-number/restore', {
+        method: 'POST',
+        headers: getAuthHeaders(),
+        body: JSON.stringify({
+          metaAppId: DEFAULT_META_APP_ID,
+          phoneNumberId: TEST_PHONE_NUMBER_ID,
+          wabaId: TEST_WABA_ID,
+          displayPhoneNumber: TEST_PHONE_DISPLAY,
+          accessToken: testAccessTokenInput.trim(),
+          testRecipientPhone: testRecipientPhoneInput.trim(),
+          testMessageText: testMessageTextInput.trim()
+        })
+      });
+      const data = await res.json();
+      if (data.diagnostics) {
+        setTestDiagnostics(data.diagnostics);
+      }
+      if (data.connection) {
+        setConnection(data.connection);
+      }
+      if (!res.ok || data.status === 'ERROR') {
+        throw new Error(data.error || 'Meta Test Number verification failed.');
+      }
+      if (testAccessTokenInput.trim()) {
+        setTestAccessTokenInput('');
+      }
+      setTestSetupMessage(data.message || 'Meta Test Number configuration updated.');
+      if (data.connectionStatus === 'CONNECTED') {
+        updateWhatsAppSettings({
+          isConnected: true,
+          phoneNumberId: TEST_PHONE_NUMBER_ID,
+          businessAccountId: TEST_WABA_ID,
+          displayPhoneNumber: TEST_PHONE_DISPLAY
+        });
+        pushToast(
+          'Meta Test Number Connected',
+          data.message || 'Webhook subscribed & test message delivered!',
+          'success'
+        );
+      } else {
+        pushToast(
+          'Test Number Step Verified',
+          data.message || 'Provide an allowlisted recipient number to verify test message delivery.',
+          'warning'
+        );
+      }
+    } catch (err) {
+      setOnboardingError(err.message);
+      pushToast('Test Number Verification Failed', err.message, 'danger');
+    } finally {
+      setVerifyingTestSetup(false);
     }
   };
 
@@ -1823,9 +1895,57 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
                 </div>
               )}
 
+              {/* Restored Meta Official Test Number Configuration Summary */}
+              <div className="p-4 rounded-2xl bg-white/80 border border-emerald-200/90 space-y-2.5 text-xs">
+                <div className="flex items-center justify-between gap-2">
+                  <span className="font-bold text-slate-900">
+                    Restored Meta Official Cloud API Test Number Setup
+                  </span>
+                  <span className="px-2.5 py-0.5 rounded-full text-[10px] font-mono font-bold bg-amber-500/15 text-amber-900 border border-amber-300">
+                    Real Number +91 7902931503 Untouched
+                  </span>
+                </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[11px]">
+                  <div className="p-2 rounded-xl bg-slate-900/5 border border-slate-200/80">
+                    <span className="text-slate-500 font-semibold">Test Phone:</span>{' '}
+                    <span className="font-mono font-bold text-slate-900">
+                      {connection?.displayPhoneNumber || TEST_PHONE_DISPLAY}
+                    </span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-slate-900/5 border border-slate-200/80">
+                    <span className="text-slate-500 font-semibold">Phone Number ID:</span>{' '}
+                    <span className="font-mono font-bold text-slate-900">
+                      {connection?.phoneNumberId || TEST_PHONE_NUMBER_ID}
+                    </span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-slate-900/5 border border-slate-200/80">
+                    <span className="text-slate-500 font-semibold">WABA ID:</span>{' '}
+                    <span className="font-mono font-bold text-slate-900">
+                      {connection?.wabaId || TEST_WABA_ID}
+                    </span>
+                  </div>
+                  <div className="p-2 rounded-xl bg-slate-900/5 border border-slate-200/80">
+                    <span className="text-slate-500 font-semibold">Meta App ID:</span>{' '}
+                    <span className="font-mono font-bold text-slate-900">
+                      {connection?.metaAppId || DEFAULT_META_APP_ID}
+                    </span>
+                  </div>
+                </div>
+                <div className="text-[11px] font-mono text-slate-600 truncate">
+                  <strong className="font-sans text-slate-700">Production Webhook:</strong>{' '}
+                  {connection?.webhookUrl || PRODUCTION_WEBHOOK_URL}
+                </div>
+              </div>
+
               {isErrorState && connection?.lastError && (
                 <div className="p-3 rounded-2xl bg-rose-500/15 border border-rose-300 text-rose-900 text-xs font-medium">
-                  <strong>Last Onboarding Error:</strong> {connection.lastError}
+                  <strong>Verification Status:</strong> {connection.lastError}
+                </div>
+              )}
+
+              {testSetupMessage && (
+                <div className="p-3 rounded-2xl bg-emerald-500/15 border border-emerald-300 text-emerald-950 text-xs font-medium">
+                  {testSetupMessage}
                 </div>
               )}
 
@@ -1874,41 +1994,131 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
               </div>
             </div>
 
-            {/* Visual Flow Preview Card */}
-            <div className="p-4 rounded-2xl bg-white/70 border border-white/90 text-xs space-y-2.5 min-w-[280px] max-w-md">
-              <div className="font-bold text-slate-900 flex items-center justify-between">
-                <span>Automated Onboarding Flow</span>
+            {/* Official Meta Test Number Verification & Test Message Delivery Form */}
+            <form
+              onSubmit={handleRestoreAndVerifyTestNumber}
+              className="p-4 rounded-2xl bg-white/80 border border-white/95 text-xs space-y-3 min-w-[300px] max-w-lg w-full"
+            >
+              <div className="font-bold text-slate-900 flex items-center justify-between gap-2">
+                <span>Verify & Connect Meta Test Number (+1 555-639-1516)</span>
                 <span className="text-[10px] font-mono px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-800 border border-emerald-300">
-                  Real Meta Verification
+                  Graph API v21.0
                 </span>
               </div>
-              <div className="space-y-1.5 text-[11px] text-slate-700">
-                <div className="flex items-center gap-2">
-                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                    1
-                  </span>
-                  <span>Meta / Facebook Login for Business</span>
+              <p className="text-[11px] text-slate-600 leading-relaxed">
+                Paste a fresh Meta Test Access Token from{' '}
+                <strong>Meta App Dashboard ({DEFAULT_META_APP_ID}) → WhatsApp → API Setup</strong> and
+                an allowlisted recipient number to verify webhook subscription and test message
+                delivery before marking Connected.
+              </p>
+
+              <div className="space-y-2">
+                <div>
+                  <label className="flex items-center justify-between text-[11px] font-semibold text-slate-700 mb-1">
+                    <span>Meta Test Access Token (Encrypted at Rest)</span>
+                    <span
+                      className={`text-[10px] font-bold ${
+                        connection?.accessTokenConfigured ? 'text-emerald-700' : 'text-amber-700'
+                      }`}
+                    >
+                      {connection?.accessTokenConfigured ? 'Token Stored in DB' : 'Required'}
+                    </span>
+                  </label>
+                  <div className="relative">
+                    <input
+                      type={showTestToken ? 'text' : 'password'}
+                      value={testAccessTokenInput}
+                      onChange={(e) => setTestAccessTokenInput(e.target.value)}
+                      placeholder={
+                        connection?.accessTokenConfigured
+                          ? 'Paste refreshed 24h Test Token or leave blank to reuse stored token...'
+                          : 'Paste EAAG... Test Access Token from Meta API Setup'
+                      }
+                      autoComplete="new-password"
+                      className="w-full pl-3 pr-8 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setShowTestToken((p) => !p)}
+                      className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+                    >
+                      {showTestToken ? (
+                        <EyeOff className="w-3.5 h-3.5" />
+                      ) : (
+                        <Eye className="w-3.5 h-3.5" />
+                      )}
+                    </button>
+                  </div>
                 </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                    2
-                  </span>
-                  <span>Select Business Portfolio & WABA</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                    3
-                  </span>
-                  <span>Connect WhatsApp Business Number (Coexistence safe)</span>
-                </div>
-                <div className="flex items-center gap-2">
-                  <span className="w-4 h-4 rounded-full bg-emerald-600 text-white text-[10px] font-bold flex items-center justify-center shrink-0">
-                    4
-                  </span>
-                  <span>Return to PulseFlow → Inbox + AI Automation Active</span>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-700 mb-1">
+                    Allowlisted Test Recipient Phone Number (for Delivery Check)
+                  </label>
+                  <input
+                    type="text"
+                    value={testRecipientPhoneInput}
+                    onChange={(e) => setTestRecipientPhoneInput(e.target.value)}
+                    placeholder="e.g. +91 98470 11223 (must be in Meta API Setup 'To' list)"
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white font-mono text-xs"
+                  />
                 </div>
               </div>
-            </div>
+
+              {testDiagnostics && (
+                <div className="p-2.5 rounded-xl bg-slate-900/5 border border-slate-200/90 grid grid-cols-2 gap-1.5 text-[11px]">
+                  <div>
+                    Token Valid:{' '}
+                    <strong className={testDiagnostics.tokenValid ? 'text-emerald-700' : 'text-rose-700'}>
+                      {testDiagnostics.tokenValid ? 'Yes' : 'No'}
+                    </strong>
+                  </div>
+                  <div>
+                    WABA ({TEST_WABA_ID}):{' '}
+                    <strong className={testDiagnostics.wabaVerified ? 'text-emerald-700' : 'text-rose-700'}>
+                      {testDiagnostics.wabaVerified ? 'Verified' : 'Pending'}
+                    </strong>
+                  </div>
+                  <div>
+                    Phone ID ({TEST_PHONE_NUMBER_ID}):{' '}
+                    <strong className={testDiagnostics.phoneVerified ? 'text-emerald-700' : 'text-rose-700'}>
+                      {testDiagnostics.phoneVerified ? 'Verified' : 'Pending'}
+                    </strong>
+                  </div>
+                  <div>
+                    Webhook Subscribed:{' '}
+                    <strong className={testDiagnostics.webhookSubscribed ? 'text-emerald-700' : 'text-rose-700'}>
+                      {testDiagnostics.webhookSubscribed ? 'Verified' : 'Pending'}
+                    </strong>
+                  </div>
+                  <div className="col-span-2">
+                    Test Message Delivery:{' '}
+                    <strong
+                      className={
+                        testDiagnostics.testMessageDelivered ? 'text-emerald-700' : 'text-amber-800'
+                      }
+                    >
+                      {testDiagnostics.testMessageDelivered
+                        ? `Delivered (${testDiagnostics.testMessageId})`
+                        : 'Awaiting allowlisted recipient delivery check'}
+                    </strong>
+                  </div>
+                </div>
+              )}
+
+              <button
+                type="submit"
+                disabled={verifyingTestSetup}
+                className="w-full px-4 py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+              >
+                <ShieldCheck className="w-4 h-4 text-emerald-400" />
+                <span>
+                  {verifyingTestSetup
+                    ? 'Verifying Token, Webhook & Test Message...'
+                    : 'Verify Webhook & Send Test Message to Connect'}
+                </span>
+              </button>
+            </form>
           </div>
         ) : (
           /* ================= CONNECTED VIEW ================= */
@@ -1966,21 +2176,27 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
                   {connection.wabaName || 'Verified WABA'}
                 </div>
                 <div className="text-[11px] font-mono text-slate-500">
-                  ID: {connection.maskedWabaId || '—'}
+                  WABA ID: {connection.wabaId || connection.maskedWabaId || '—'}
                 </div>
               </div>
 
               <div className="p-4 rounded-2xl bg-white/75 border border-white/90 space-y-1">
                 <div className="text-[11px] font-semibold text-slate-500">Phone:</div>
                 <div className="text-sm font-mono font-bold text-slate-900">
-                  {connection.maskedPhone || '—'}
+                  {connection.displayPhoneNumber || connection.maskedPhone || '—'}
+                </div>
+                <div className="text-[11px] font-mono text-slate-500">
+                  Meta App ID: {connection.metaAppId || DEFAULT_META_APP_ID}
                 </div>
               </div>
 
               <div className="p-4 rounded-2xl bg-white/75 border border-white/90 space-y-1">
                 <div className="text-[11px] font-semibold text-slate-500">Phone Number ID:</div>
                 <div className="text-sm font-mono font-bold text-slate-900">
-                  {connection.maskedPhoneNumberId || '—'}
+                  {connection.phoneNumberId || connection.maskedPhoneNumberId || '—'}
+                </div>
+                <div className="text-[11px] font-mono text-emerald-700">
+                  +91 7902931503 Untouched
                 </div>
               </div>
             </div>
@@ -2743,7 +2959,7 @@ export const AdminSystemConfigurationVault = () => {
   const [webhookCallbackUrl, setWebhookCallbackUrl] = useState(
     'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
   );
-  const [metaAppId, setMetaAppId] = useState('1097762042867836');
+  const [metaAppId, setMetaAppId] = useState('1640164817625713');
   const [embeddedSignupConfigId, setEmbeddedSignupConfigId] = useState('1105412835405203');
   const [metaGraphApiVersion, setMetaGraphApiVersion] = useState('v21.0');
   const [aiProvider, setAiProvider] = useState('gemini');

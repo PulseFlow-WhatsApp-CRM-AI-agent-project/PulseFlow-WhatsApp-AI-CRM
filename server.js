@@ -22,6 +22,10 @@ import mongoose, {
   INITIAL_SYSTEM_CONFIG,
   DEFAULT_META_APP_ID,
   DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID,
+  META_TEST_PHONE_NUMBER_ID,
+  META_TEST_WABA_ID,
+  META_TEST_DISPLAY_PHONE,
+  INITIAL_TEST_WHATSAPP_ACCOUNT,
   hashPassword,
   verifyPassword,
   encryptSecret,
@@ -1843,15 +1847,23 @@ function buildSanitizedWhatsAppConnection({
     Boolean(waAccount?.messagingActive === true) &&
     Boolean(waAccount?.webhookSubscribed === true);
 
-  const rawPhone = isConnected ? String(waAccount?.displayPhoneNumber || '').trim() : '';
-  const rawPhoneId = isConnected ? String(waAccount?.phoneNumberId || '').trim() : '';
-  const rawWabaId = isConnected ? String(waAccount?.wabaId || '').trim() : '';
-  const businessPortfolioId = isConnected
-    ? String(waAccount?.businessPortfolioId || waAccount?.businessId || '').trim()
-    : '';
-  const businessName = isConnected ? String(waAccount?.businessName || '').trim() : '';
-  const verifiedName = isConnected ? String(waAccount?.verifiedName || '').trim() : '';
-  const wabaName = isConnected ? String(waAccount?.wabaName || '').trim() : '';
+  const rawPhone = String(waAccount?.displayPhoneNumber || META_TEST_DISPLAY_PHONE || '').trim();
+  const rawPhoneId = String(waAccount?.phoneNumberId || META_TEST_PHONE_NUMBER_ID || '').trim();
+  const rawWabaId = String(waAccount?.wabaId || META_TEST_WABA_ID || '').trim();
+  const rawMetaAppId = String(waAccount?.metaAppId || DEFAULT_META_APP_ID || '').trim();
+  const businessPortfolioId = String(
+    waAccount?.businessPortfolioId || waAccount?.businessId || ''
+  ).trim();
+  const businessName = String(
+    waAccount?.businessName || 'Meta Official Test Number'
+  ).trim();
+  const verifiedName = String(waAccount?.verifiedName || 'Test Number').trim();
+  const wabaName = String(
+    waAccount?.wabaName || 'WhatsApp Test Business Account'
+  ).trim();
+  const hasStoredToken = Boolean(
+    waAccount?.accessToken && decryptSecret(waAccount.accessToken)
+  );
 
   const coexistenceStatus = isConnected
     ? waAccount?.coexistenceStatus || (waAccount?.isOnBizApp ? 'CONNECTED' : 'NOT_ELIGIBLE')
@@ -1865,12 +1877,15 @@ function buildSanitizedWhatsAppConnection({
       ? 'ERROR'
       : 'NOT_CONNECTED',
     connected: Boolean(isConnected),
-    onboardingMode: waAccount?.onboardingMode || 'COEXISTENCE',
+    onboardingMode: waAccount?.onboardingMode || 'CLOUD_API',
     coexistenceStatus,
     coexistenceEligible: isConnected ? coexistenceStatus === 'CONNECTED' : null,
-    coexistenceStatusNote: isConnected ? waAccount?.coexistenceStatusNote || '' : '',
+    coexistenceStatusNote:
+      waAccount?.coexistenceStatusNote ||
+      'Meta Official Cloud API Test Number (+1 555-639-1516). Real number +91 7902931503 is untouched.',
     isOnBizApp: Boolean(isConnected && waAccount?.isOnBizApp),
-    platformType: isConnected ? waAccount?.platformType || '' : '',
+    platformType: waAccount?.platformType || 'CLOUD_API',
+    metaAppId: rawMetaAppId,
     businessPortfolioId,
     businessId: businessPortfolioId,
     businessName,
@@ -1882,9 +1897,11 @@ function buildSanitizedWhatsAppConnection({
     displayPhoneNumber: rawPhone,
     maskedPhone: maskPhoneNumber(rawPhone),
     verifiedName,
-    qualityRating: isConnected ? waAccount?.qualityRating || '' : '',
+    qualityRating: waAccount?.qualityRating || 'GREEN',
+    isTestNumber: rawPhoneId === META_TEST_PHONE_NUMBER_ID || rawPhone.includes('555'),
+    accessTokenConfigured: hasStoredToken,
     messagingActive: Boolean(isConnected && waAccount?.messagingActive === true),
-    webhookSubscribed: Boolean(isConnected && waAccount?.webhookSubscribed === true),
+    webhookSubscribed: Boolean(waAccount?.webhookSubscribed === true),
     webhookConnected: Boolean(isConnected && waAccount?.webhookSubscribed === true),
     webhookVerifyTokenConfigured: Boolean(webhookReady),
     aiAutomationEnabled: Boolean(
@@ -1895,7 +1912,7 @@ function buildSanitizedWhatsAppConnection({
     connectedBy: waAccount?.connectedBy || '',
     connectedAt: isConnected ? waAccount?.connectedAt || '' : '',
     updatedAt: waAccount?.updatedAt || '',
-    lastVerifiedAt: isConnected ? waAccount?.lastVerifiedAt || '' : '',
+    lastVerifiedAt: waAccount?.lastVerifiedAt || '',
     lastError: waAccount?.lastError || ''
   };
 }
@@ -2613,12 +2630,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
         'Connected via standard WhatsApp Cloud API. Coexistence is not active for this number.';
     }
 
-    // 7. Prevent duplicate WhatsAppAccount records & persist verified connection in MongoDB
-    await WhatsAppAccount.deleteMany({
-      id: { $ne: 'primary' },
-      $or: [{ phoneNumberId: resolvedPhoneId }, { wabaId: resolvedWabaId }]
-    }).catch(() => {});
-
+    // 7. Persist verified connection in MongoDB (Never delete database records)
     const nowIso = new Date().toISOString();
     const updatedAccount = await WhatsAppAccount.findOneAndUpdate(
       { id: 'primary' },
@@ -2707,7 +2719,7 @@ app.post('/api/whatsapp/embedded-signup/complete', requireAuth, requireAdmin, as
 });
 
 // Disconnect WhatsApp account from PulseFlow CRM (Protected: Admin only)
-// IMPORTANT: Does NOT deregister or deactivate the WhatsApp Business mobile app number on Meta.
+// IMPORTANT: Does NOT deregister or deactivate any phone number on Meta, and preserves configured test number IDs.
 app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res) => {
   try {
     const sysCfg = await getRuntimeSystemConfig(req);
@@ -2722,7 +2734,6 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
           connectionStatus: 'NOT_CONNECTED',
           coexistenceStatus: 'NOT_ELIGIBLE',
           coexistenceEligible: false,
-          coexistenceStatusNote: '',
           messagingActive: false,
           webhookSubscribed: false,
           accessToken: '',
@@ -2738,9 +2749,6 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
       {
         $set: {
           'data.isConnected': false,
-          'data.phoneNumberId': '',
-          'data.businessAccountId': '',
-          'data.displayPhoneNumber': '',
           'data.lastWebhookAt': 'Disconnected'
         }
       }
@@ -2761,6 +2769,582 @@ app.post('/api/whatsapp/disconnect', requireAuth, requireAdmin, async (req, res)
     });
   } catch (err) {
     res.status(500).json({ ok: false, status: 'ERROR', error: err.message });
+  }
+});
+
+// ============================================================================
+// RESTORE & VERIFY META OFFICIAL WHATSAPP CLOUD API TEST NUMBER (+1 555-639-1516)
+// Protected: Admin only.
+// Strictly follows all safety rules:
+// - Restores test phone +1 (555) 639-1516, Phone Number ID 1346163251921781, WABA ID 1117283247416297, Meta App ID 1640164817625713
+// - Keeps real number +91 7902931503 completely untouched
+// - Never invents tokens, never reuses expired tokens, never deletes DB records, never calls /register or /deregister
+// - Verifies Graph API token + WABA + Phone ID + Webhook Subscription + Test Message Delivery BEFORE marking WhatsApp as CONNECTED
+// ============================================================================
+app.post('/api/whatsapp/test-number/restore', requireAuth, requireAdmin, async (req, res) => {
+  try {
+    await connectDB();
+    const sysCfg = await getRuntimeSystemConfig(req);
+    const existingAccount = await WhatsAppAccount.findOne({ id: 'primary' });
+    const aiSettingDoc = await Setting.findOne({ type: 'aiSettings' });
+    const aiSettings = aiSettingDoc?.data || INITIAL_AI_SETTINGS;
+    const nowIso = new Date().toISOString();
+
+    const targetMetaAppId = String(req.body?.metaAppId || DEFAULT_META_APP_ID || '1640164817625713').trim();
+    const targetPhoneId = String(req.body?.phoneNumberId || META_TEST_PHONE_NUMBER_ID).trim();
+    const targetWabaId = String(req.body?.wabaId || META_TEST_WABA_ID).trim();
+    const targetDisplayPhone = String(req.body?.displayPhoneNumber || META_TEST_DISPLAY_PHONE).trim();
+    const testRecipientPhone = normalizePhone(req.body?.testRecipientPhone || '');
+    const customTestMessage = String(req.body?.testMessageText || '').trim();
+    const version = sysCfg.whatsappApiVersion || 'v21.0';
+    const webhookUrl = sysCfg.webhookUrl || 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook';
+
+    // Safeguard: Refuse to connect the real number +91 7902931503 in the test-number flow
+    if (
+      targetDisplayPhone.replace(/\D/g, '').includes('7902931503') ||
+      String(req.body?.phoneNumberId || '').includes('7902931503')
+    ) {
+      return res.status(400).json({
+        ok: false,
+        status: 'ERROR',
+        error:
+          'Safety Block: Real WhatsApp Business number +91 7902931503 must remain untouched during Meta Test Number setup.'
+      });
+    }
+
+    // 1. Always restore the test number configuration metadata safely in SystemConfig, WhatsAppAccount, and Setting
+    await SystemConfig.findOneAndUpdate(
+      { id: 'primary' },
+      {
+        $set: {
+          metaAppId: targetMetaAppId,
+          publicAppUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com',
+          updatedBy: req.authUser?.email || req.authUser?.name || 'Admin',
+          updatedAt: nowIso
+        }
+      },
+      { upsert: true }
+    );
+
+    const rawInputToken = String(req.body?.accessToken || '').trim();
+    const storedDecryptedToken = existingAccount?.accessToken
+      ? decryptSecret(existingAccount.accessToken)
+      : '';
+    const candidateToken = rawInputToken || storedDecryptedToken;
+
+    const diagnostics = {
+      metaAppIdConfigured: targetMetaAppId,
+      phoneNumberIdConfigured: targetPhoneId,
+      wabaIdConfigured: targetWabaId,
+      displayPhoneConfigured: targetDisplayPhone,
+      webhookUrlConfigured: webhookUrl,
+      realNumberUntouched: '+91 7902931503 (Untouched)',
+      tokenProvided: Boolean(candidateToken),
+      tokenValid: false,
+      tokenAppId: '',
+      tokenBelongsToTargetApp: null,
+      wabaVerified: false,
+      phoneVerified: false,
+      webhookSubscribed: false,
+      testMessageDelivered: false,
+      testMessageId: '',
+      stepError: ''
+    };
+
+    // If no token was provided or stored yet, restore metadata with NOT_CONNECTED status
+    if (!candidateToken) {
+      const restoredAccount = await WhatsAppAccount.findOneAndUpdate(
+        { id: 'primary' },
+        {
+          $set: {
+            metaAppId: targetMetaAppId,
+            wabaId: targetWabaId,
+            phoneNumberId: targetPhoneId,
+            displayPhoneNumber: targetDisplayPhone,
+            businessName: 'Meta Official Test Number',
+            wabaName: 'WhatsApp Test Business Account',
+            verifiedName: 'Test Number',
+            onboardingMode: 'CLOUD_API',
+            coexistenceStatus: 'NOT_ELIGIBLE',
+            coexistenceEligible: false,
+            coexistenceStatusNote:
+              'Meta Official Cloud API Test Number (+1 555-639-1516). Real number +91 7902931503 is untouched.',
+            status: 'NOT_CONNECTED',
+            connectionStatus: 'NOT_CONNECTED',
+            messagingActive: false,
+            webhookSubscribed: false,
+            lastError:
+              'Test number metadata restored (+1 555-639-1516). Paste a valid Meta Test Access Token from Meta App Dashboard → WhatsApp → API Setup to verify webhook subscription and test message delivery.',
+            updatedAt: nowIso
+          }
+        },
+        { upsert: true, new: true }
+      );
+
+      await Setting.findOneAndUpdate(
+        { type: 'whatsappSettings' },
+        {
+          $set: {
+            'data.phoneNumberId': targetPhoneId,
+            'data.businessAccountId': targetWabaId,
+            'data.displayPhoneNumber': targetDisplayPhone,
+            'data.metaAppId': targetMetaAppId,
+            'data.webhookUrl': webhookUrl,
+            'data.isConnected': false,
+            'data.lastWebhookAt': 'Awaiting valid Meta Test Access Token'
+          }
+        },
+        { upsert: true }
+      );
+
+      return res.json({
+        ok: true,
+        metadataRestored: true,
+        status: 'NOT_CONNECTED',
+        connectionStatus: 'NOT_CONNECTED',
+        diagnostics,
+        message:
+          'Test number configuration (+1 555-639-1516, Phone ID 1346163251921781, WABA ID 1117283247416297, App ID 1640164817625713) restored. Provide a valid Meta Test Access Token and test recipient number to verify and connect.',
+        connection: buildSanitizedWhatsAppConnection({
+          waAccount: restoredAccount,
+          aiSettings,
+          webhookUrl,
+          webhookReady: sysCfg.whatsappVerifyTokenConfigured
+        })
+      });
+    }
+
+    // 2. Inspect token validity and App ID via GET /debug_token (Read-only)
+    try {
+      const debugRes = await fetch(
+        `https://graph.facebook.com/${version}/debug_token?input_token=${encodeURIComponent(
+          candidateToken
+        )}&access_token=${encodeURIComponent(candidateToken)}`
+      );
+      const debugData = await debugRes.json();
+      if (debugRes.ok && debugData?.data?.is_valid) {
+        diagnostics.tokenValid = true;
+        diagnostics.tokenAppId = String(debugData.data.app_id || '');
+        diagnostics.tokenBelongsToTargetApp =
+          !diagnostics.tokenAppId || diagnostics.tokenAppId === targetMetaAppId;
+      }
+    } catch {
+      // Proceed to direct WABA & Phone Number Graph API checks below
+    }
+
+    // 3. Verify WABA ID (1117283247416297) via Meta Graph API (Read-only)
+    let resolvedWabaName = 'WhatsApp Test Business Account';
+    let resolvedBusinessName = 'Meta Official Test Number';
+    try {
+      const wabaRes = await fetch(
+        `https://graph.facebook.com/${version}/${targetWabaId}?fields=id,name,owner_business_info`,
+        { headers: { Authorization: `Bearer ${candidateToken}` } }
+      );
+      const wabaData = await wabaRes.json();
+      if (!wabaRes.ok || !wabaData?.id) {
+        const wabaErr =
+          wabaData?.error?.message || `WABA ${targetWabaId} verification failed (HTTP ${wabaRes.status}).`;
+        diagnostics.stepError = `Meta WABA (${targetWabaId}) verification failed: ${wabaErr}`;
+        const errAcc = await WhatsAppAccount.findOneAndUpdate(
+          { id: 'primary' },
+          {
+            $set: {
+              metaAppId: targetMetaAppId,
+              wabaId: targetWabaId,
+              phoneNumberId: targetPhoneId,
+              displayPhoneNumber: targetDisplayPhone,
+              status: 'ERROR',
+              connectionStatus: 'ERROR',
+              messagingActive: false,
+              webhookSubscribed: false,
+              lastError: diagnostics.stepError,
+              updatedAt: nowIso
+            }
+          },
+          { upsert: true, new: true }
+        );
+        return res.status(400).json({
+          ok: false,
+          status: 'ERROR',
+          connectionStatus: 'ERROR',
+          error: diagnostics.stepError,
+          diagnostics,
+          connection: buildSanitizedWhatsAppConnection({
+            waAccount: errAcc,
+            aiSettings,
+            webhookUrl,
+            webhookReady: sysCfg.whatsappVerifyTokenConfigured
+          })
+        });
+      }
+      diagnostics.wabaVerified = true;
+      diagnostics.tokenValid = true;
+      resolvedWabaName = String(wabaData.name || resolvedWabaName).trim();
+      resolvedBusinessName = String(
+        wabaData.owner_business_info?.name || wabaData.name || resolvedBusinessName
+      ).trim();
+    } catch (err) {
+      diagnostics.stepError = `Network error verifying WABA ${targetWabaId}: ${err.message}`;
+      return res.status(502).json({ ok: false, status: 'ERROR', error: diagnostics.stepError, diagnostics });
+    }
+
+    // 4. Verify Test Phone Number ID (1346163251921781) via Meta Graph API (Read-only — NEVER calls /register or /deregister)
+    let resolvedDisplayPhone = targetDisplayPhone;
+    let resolvedVerifiedName = 'Test Number';
+    let resolvedQuality = 'GREEN';
+    let resolvedPlatform = 'CLOUD_API';
+    try {
+      const phoneRes = await fetch(
+        `https://graph.facebook.com/${version}/${targetPhoneId}?fields=id,display_phone_number,verified_name,code_verification_status,quality_rating,platform_type,is_on_biz_app`,
+        { headers: { Authorization: `Bearer ${candidateToken}` } }
+      );
+      const phoneData = await phoneRes.json();
+      if (!phoneRes.ok || !phoneData?.id) {
+        const phoneErr =
+          phoneData?.error?.message ||
+          `Phone Number ID ${targetPhoneId} verification failed (HTTP ${phoneRes.status}).`;
+        diagnostics.stepError = `Meta Test Phone Number (${targetPhoneId}) verification failed: ${phoneErr}`;
+        const errAcc = await WhatsAppAccount.findOneAndUpdate(
+          { id: 'primary' },
+          {
+            $set: {
+              metaAppId: targetMetaAppId,
+              wabaId: targetWabaId,
+              phoneNumberId: targetPhoneId,
+              displayPhoneNumber: targetDisplayPhone,
+              status: 'ERROR',
+              connectionStatus: 'ERROR',
+              messagingActive: false,
+              webhookSubscribed: false,
+              lastError: diagnostics.stepError,
+              updatedAt: nowIso
+            }
+          },
+          { upsert: true, new: true }
+        );
+        return res.status(400).json({
+          ok: false,
+          status: 'ERROR',
+          connectionStatus: 'ERROR',
+          error: diagnostics.stepError,
+          diagnostics,
+          connection: buildSanitizedWhatsAppConnection({
+            waAccount: errAcc,
+            aiSettings,
+            webhookUrl,
+            webhookReady: sysCfg.whatsappVerifyTokenConfigured
+          })
+        });
+      }
+      diagnostics.phoneVerified = true;
+      resolvedDisplayPhone = String(phoneData.display_phone_number || targetDisplayPhone).trim();
+      resolvedVerifiedName = String(phoneData.verified_name || resolvedVerifiedName).trim();
+      resolvedQuality = String(phoneData.quality_rating || resolvedQuality).trim();
+      resolvedPlatform = String(phoneData.platform_type || resolvedPlatform).trim();
+    } catch (err) {
+      diagnostics.stepError = `Network error verifying Phone Number ID ${targetPhoneId}: ${err.message}`;
+      return res.status(502).json({ ok: false, status: 'ERROR', error: diagnostics.stepError, diagnostics });
+    }
+
+    // 5. Subscribe & Verify WABA Webhook Subscription (POST /{WABA-ID}/subscribed_apps + GET /{WABA-ID}/subscribed_apps)
+    try {
+      await fetch(`https://graph.facebook.com/${version}/${targetWabaId}/subscribed_apps`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${candidateToken}`,
+          'Content-Type': 'application/json'
+        }
+      });
+
+      const subGetRes = await fetch(
+        `https://graph.facebook.com/${version}/${targetWabaId}/subscribed_apps`,
+        { headers: { Authorization: `Bearer ${candidateToken}` } }
+      );
+      const subGetData = await subGetRes.json();
+      if (subGetRes.ok && Array.isArray(subGetData?.data) && subGetData.data.length > 0) {
+        diagnostics.webhookSubscribed = true;
+      } else {
+        diagnostics.stepError =
+          subGetData?.error?.message ||
+          'WABA webhook subscription verification failed (GET /subscribed_apps returned empty).';
+      }
+    } catch (err) {
+      diagnostics.stepError = `Webhook subscription check failed: ${err.message}`;
+    }
+
+    if (!diagnostics.webhookSubscribed) {
+      const errAcc = await WhatsAppAccount.findOneAndUpdate(
+        { id: 'primary' },
+        {
+          $set: {
+            metaAppId: targetMetaAppId,
+            wabaId: targetWabaId,
+            wabaName: resolvedWabaName,
+            businessName: resolvedBusinessName,
+            phoneNumberId: targetPhoneId,
+            displayPhoneNumber: resolvedDisplayPhone,
+            verifiedName: resolvedVerifiedName,
+            accessToken: encryptSecret(candidateToken),
+            status: 'ERROR',
+            connectionStatus: 'ERROR',
+            messagingActive: false,
+            webhookSubscribed: false,
+            lastError: diagnostics.stepError,
+            updatedAt: nowIso
+          }
+        },
+        { upsert: true, new: true }
+      );
+      return res.status(400).json({
+        ok: false,
+        status: 'ERROR',
+        connectionStatus: 'ERROR',
+        error: diagnostics.stepError,
+        diagnostics,
+        connection: buildSanitizedWhatsAppConnection({
+          waAccount: errAcc,
+          aiSettings,
+          webhookUrl,
+          webhookReady: sysCfg.whatsappVerifyTokenConfigured
+        })
+      });
+    }
+
+    // 6. Verify Test Message Delivery BEFORE marking WhatsApp as CONNECTED
+    if (!testRecipientPhone) {
+      const pendingAcc = await WhatsAppAccount.findOneAndUpdate(
+        { id: 'primary' },
+        {
+          $set: {
+            metaAppId: targetMetaAppId,
+            wabaId: targetWabaId,
+            wabaName: resolvedWabaName,
+            businessName: resolvedBusinessName,
+            phoneNumberId: targetPhoneId,
+            displayPhoneNumber: resolvedDisplayPhone,
+            verifiedName: resolvedVerifiedName,
+            qualityRating: resolvedQuality,
+            platformType: resolvedPlatform,
+            onboardingMode: 'CLOUD_API',
+            coexistenceStatus: 'NOT_ELIGIBLE',
+            coexistenceEligible: false,
+            accessToken: encryptSecret(candidateToken),
+            webhookSubscribed: true,
+            messagingActive: false,
+            status: 'NOT_CONNECTED',
+            connectionStatus: 'NOT_CONNECTED',
+            lastVerifiedAt: nowIso,
+            updatedAt: nowIso,
+            lastError:
+              'Token, Test Phone ID (1346163251921781), WABA ID (1117283247416297), and Webhook Subscription verified. Enter an allowlisted Test Recipient Phone Number and click "Verify & Send Test Message" to confirm delivery before marking Connected.'
+          }
+        },
+        { upsert: true, new: true }
+      );
+
+      return res.json({
+        ok: true,
+        status: 'NOT_CONNECTED',
+        connectionStatus: 'NOT_CONNECTED',
+        diagnostics,
+        message:
+          'Meta Test Token and Webhook Subscription verified! Now provide an allowlisted Test Recipient Phone Number to verify test message delivery and mark WhatsApp as Connected.',
+        connection: buildSanitizedWhatsAppConnection({
+          waAccount: pendingAcc,
+          aiSettings,
+          webhookUrl,
+          webhookReady: sysCfg.whatsappVerifyTokenConfigured
+        })
+      });
+    }
+
+    // Send real outbound test message via Meta Graph API (tries text first if customTestMessage provided, then falls back to hello_world template)
+    let testWamid = '';
+    let sendErrorMsg = '';
+    try {
+      const sendTemplate = async () => {
+        const tplRes = await fetch(
+          `https://graph.facebook.com/${version}/${targetPhoneId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${candidateToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              to: testRecipientPhone,
+              type: 'template',
+              template: {
+                name: 'hello_world',
+                language: { code: 'en_US' }
+              }
+            })
+          }
+        );
+        const tplData = await tplRes.json();
+        return { ok: tplRes.ok, data: tplData, status: tplRes.status };
+      };
+
+      if (customTestMessage) {
+        const txtRes = await fetch(
+          `https://graph.facebook.com/${version}/${targetPhoneId}/messages`,
+          {
+            method: 'POST',
+            headers: {
+              Authorization: `Bearer ${candidateToken}`,
+              'Content-Type': 'application/json'
+            },
+            body: JSON.stringify({
+              messaging_product: 'whatsapp',
+              recipient_type: 'individual',
+              to: testRecipientPhone,
+              type: 'text',
+              text: { preview_url: false, body: customTestMessage }
+            })
+          }
+        );
+        const txtData = await txtRes.json();
+        if (txtRes.ok && txtData?.messages?.[0]?.id) {
+          testWamid = txtData.messages[0].id;
+        } else {
+          // Fallback to official hello_world template if 24-hour customer service window is not open yet
+          const tplAttempt = await sendTemplate();
+          if (tplAttempt.ok && tplAttempt.data?.messages?.[0]?.id) {
+            testWamid = tplAttempt.data.messages[0].id;
+          } else {
+            sendErrorMsg =
+              tplAttempt.data?.error?.message ||
+              txtData?.error?.message ||
+              `Test message delivery failed (HTTP ${tplAttempt.status}).`;
+          }
+        }
+      } else {
+        const tplAttempt = await sendTemplate();
+        if (tplAttempt.ok && tplAttempt.data?.messages?.[0]?.id) {
+          testWamid = tplAttempt.data.messages[0].id;
+        } else {
+          sendErrorMsg =
+            tplAttempt.data?.error?.message ||
+            `Test message delivery failed (HTTP ${tplAttempt.status}).`;
+        }
+      }
+    } catch (err) {
+      sendErrorMsg = `Network error sending test message: ${err.message}`;
+    }
+
+    if (!testWamid) {
+      diagnostics.stepError = `Test message delivery to +${testRecipientPhone} failed: ${sendErrorMsg}`;
+      const pendingAcc = await WhatsAppAccount.findOneAndUpdate(
+        { id: 'primary' },
+        {
+          $set: {
+            metaAppId: targetMetaAppId,
+            wabaId: targetWabaId,
+            wabaName: resolvedWabaName,
+            businessName: resolvedBusinessName,
+            phoneNumberId: targetPhoneId,
+            displayPhoneNumber: resolvedDisplayPhone,
+            verifiedName: resolvedVerifiedName,
+            qualityRating: resolvedQuality,
+            platformType: resolvedPlatform,
+            accessToken: encryptSecret(candidateToken),
+            webhookSubscribed: true,
+            messagingActive: false,
+            status: 'ERROR',
+            connectionStatus: 'ERROR',
+            lastError: diagnostics.stepError,
+            updatedAt: nowIso
+          }
+        },
+        { upsert: true, new: true }
+      );
+      return res.status(400).json({
+        ok: false,
+        status: 'ERROR',
+        connectionStatus: 'ERROR',
+        error: diagnostics.stepError,
+        diagnostics,
+        connection: buildSanitizedWhatsAppConnection({
+          waAccount: pendingAcc,
+          aiSettings,
+          webhookUrl,
+          webhookReady: sysCfg.whatsappVerifyTokenConfigured
+        })
+      });
+    }
+
+    diagnostics.testMessageDelivered = true;
+    diagnostics.testMessageId = testWamid;
+
+    // 7. All checks verified (Token + WABA + Phone ID + Webhook Subscription + Test Message Delivery) -> Mark CONNECTED
+    const connectedAccount = await WhatsAppAccount.findOneAndUpdate(
+      { id: 'primary' },
+      {
+        $set: {
+          connectedByUserId: req.authUser?.id || '',
+          connectedBy: req.authUser?.email || req.authUser?.name || 'Admin',
+          metaAppId: targetMetaAppId,
+          wabaId: targetWabaId,
+          wabaName: resolvedWabaName,
+          businessName: resolvedBusinessName,
+          phoneNumberId: targetPhoneId,
+          displayPhoneNumber: resolvedDisplayPhone,
+          verifiedName: resolvedVerifiedName,
+          qualityRating: resolvedQuality,
+          platformType: resolvedPlatform,
+          isOnBizApp: false,
+          onboardingMode: 'CLOUD_API',
+          coexistenceStatus: 'NOT_ELIGIBLE',
+          coexistenceEligible: false,
+          coexistenceStatusNote:
+            'Connected via Meta Official Cloud API Test Number (+1 555-639-1516). Real number +91 7902931503 is untouched.',
+          accessToken: encryptSecret(candidateToken),
+          tokenType: 'BEARER',
+          webhookSubscribed: true,
+          messagingActive: true,
+          status: 'CONNECTED',
+          connectionStatus: 'CONNECTED',
+          connectedAt: nowIso,
+          lastVerifiedAt: nowIso,
+          updatedAt: nowIso,
+          lastError: ''
+        }
+      },
+      { upsert: true, new: true }
+    );
+
+    await Setting.findOneAndUpdate(
+      { type: 'whatsappSettings' },
+      {
+        $set: {
+          'data.isConnected': true,
+          'data.phoneNumberId': targetPhoneId,
+          'data.businessAccountId': targetWabaId,
+          'data.displayPhoneNumber': resolvedDisplayPhone,
+          'data.metaAppId': targetMetaAppId,
+          'data.webhookUrl': webhookUrl,
+          'data.lastWebhookAt': nowIso
+        }
+      },
+      { upsert: true }
+    );
+
+    return res.json({
+      ok: true,
+      status: 'CONNECTED',
+      connectionStatus: 'CONNECTED',
+      diagnostics,
+      message: `Meta Test Number (${resolvedDisplayPhone}) verified, webhook subscribed, and test message (${testWamid}) delivered to +${testRecipientPhone}. WhatsApp is now Connected!`,
+      connection: buildSanitizedWhatsAppConnection({
+        waAccount: connectedAccount,
+        aiSettings,
+        webhookUrl,
+        webhookReady: sysCfg.whatsappVerifyTokenConfigured
+      })
+    });
+  } catch (err) {
+    return res.status(500).json({ ok: false, status: 'ERROR', error: err.message });
   }
 });
 

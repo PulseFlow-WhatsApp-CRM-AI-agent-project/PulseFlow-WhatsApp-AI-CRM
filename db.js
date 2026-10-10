@@ -395,7 +395,7 @@ const SystemConfigSchema = new mongoose.Schema(
       type: String,
       default: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com'
     },
-    metaAppId: { type: String, default: '1097762042867836' },
+    metaAppId: { type: String, default: '1640164817625713' },
     metaAppSecretEncrypted: { type: String, default: '' },
     embeddedSignupConfigId: { type: String, default: '1105412835405203' },
     whatsappVerifyTokenEncrypted: { type: String, default: '' },
@@ -638,18 +638,57 @@ class InMemoryCollection {
   }
 }
 
-// Instantiate in-memory collections with default seed data (no hardcoded WhatsApp IDs, tokens, or n8n fields)
+// Instantiate in-memory collections with Meta Official Test Number metadata (isConnected: false until verified)
+export const DEFAULT_META_APP_ID = '1640164817625713';
+export const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
+export const META_TEST_PHONE_NUMBER_ID = '1346163251921781';
+export const META_TEST_WABA_ID = '1117283247416297';
+export const META_TEST_DISPLAY_PHONE = '+1 (555) 639-1516';
+
 const initialWhatsAppSettings = {
   ...INITIAL_WHATSAPP_SETTINGS,
-  phoneNumberId: '',
-  businessAccountId: '',
-  displayPhoneNumber: '',
+  phoneNumberId: META_TEST_PHONE_NUMBER_ID,
+  businessAccountId: META_TEST_WABA_ID,
+  displayPhoneNumber: META_TEST_DISPLAY_PHONE,
+  metaAppId: DEFAULT_META_APP_ID,
   isConnected: false,
   webhookUrl: 'https://pulseflow-whatsapp-ai-crm-web.onrender.com/webhook'
 };
 
-export const DEFAULT_META_APP_ID = '1097762042867836';
-export const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
+export const INITIAL_TEST_WHATSAPP_ACCOUNT = {
+  id: 'primary',
+  connectedByUserId: '',
+  connectedBy: 'Meta Test Number Setup',
+  wabaId: META_TEST_WABA_ID,
+  phoneNumberId: META_TEST_PHONE_NUMBER_ID,
+  businessPortfolioId: '',
+  businessId: '',
+  businessName: 'Meta Official Test Number',
+  wabaName: 'WhatsApp Test Business Account',
+  displayPhoneNumber: META_TEST_DISPLAY_PHONE,
+  verifiedName: 'Test Number',
+  qualityRating: 'GREEN',
+  codeVerificationStatus: 'VERIFIED',
+  platformType: 'CLOUD_API',
+  isOnBizApp: false,
+  connectionStatus: 'NOT_CONNECTED',
+  status: 'NOT_CONNECTED',
+  coexistenceStatus: 'NOT_ELIGIBLE',
+  onboardingMode: 'CLOUD_API',
+  coexistenceEligible: false,
+  coexistenceStatusNote:
+    'Meta Official Cloud API Test Number (+1 555-639-1516). Real number +91 7902931503 is untouched.',
+  accessToken: '',
+  tokenType: 'BEARER',
+  webhookSubscribed: false,
+  messagingActive: false,
+  metaAppId: DEFAULT_META_APP_ID,
+  embeddedSignupConfigId: DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID,
+  connectedAt: '',
+  updatedAt: new Date().toISOString(),
+  lastVerifiedAt: '',
+  lastError: ''
+};
 
 export const INITIAL_SYSTEM_CONFIG = {
   id: 'primary',
@@ -692,7 +731,7 @@ const inMemoryStores = {
     { type: 'companySettings', data: INITIAL_COMPANY_SETTINGS }
   ]),
   Notification: new InMemoryCollection(INITIAL_NOTIFICATIONS),
-  WhatsAppAccount: new InMemoryCollection([]),
+  WhatsAppAccount: new InMemoryCollection([INITIAL_TEST_WHATSAPP_ACCOUNT]),
   SystemConfig: new InMemoryCollection([INITIAL_SYSTEM_CONFIG])
 };
 
@@ -737,10 +776,13 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       await SystemConfig.create({ ...INITIAL_SYSTEM_CONFIG, updatedAt: new Date().toISOString() });
     } else {
       const sysUpdates = {};
-      if (sysCfg.metaAppId !== DEFAULT_META_APP_ID) {
+      if (!sysCfg.metaAppId || sysCfg.metaAppId === '1420003542794708') {
         sysUpdates.metaAppId = DEFAULT_META_APP_ID;
       }
-      if (sysCfg.embeddedSignupConfigId !== DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID) {
+      if (
+        !sysCfg.embeddedSignupConfigId ||
+        sysCfg.embeddedSignupConfigId === '47642322601105412835405203476567'
+      ) {
         sysUpdates.embeddedSignupConfigId = DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
       }
       if (sysCfg.metaAppSecretEncrypted && !isEncryptedSecret(sysCfg.metaAppSecretEncrypted)) {
@@ -789,27 +831,42 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       }
     }
 
-    // Remove any unverified WhatsAppAccount records that do not have a real accessToken, and encrypt real accessTokens at rest
-    const allWaAccounts = await WhatsAppAccount.find({});
+    // Preserve existing WhatsAppAccount records (NEVER delete database records) and ensure test number metadata is present when unconfigured
+    const primaryWa = await WhatsAppAccount.findOne({ id: 'primary' });
     let hasVerifiedAccount = false;
-    for (const acc of allWaAccounts) {
-      if (!acc.accessToken || acc.connectionStatus !== 'CONNECTED') {
-        await WhatsAppAccount.findOneAndDelete({ id: acc.id });
-      } else {
+    if (!primaryWa) {
+      await WhatsAppAccount.create({
+        ...INITIAL_TEST_WHATSAPP_ACCOUNT,
+        updatedAt: new Date().toISOString()
+      });
+    } else {
+      const accUpdates = {};
+      if (primaryWa.accessToken && !isEncryptedSecret(primaryWa.accessToken)) {
+        accUpdates.accessToken = encryptSecret(primaryWa.accessToken);
+      }
+      if (!primaryWa.phoneNumberId) {
+        accUpdates.phoneNumberId = META_TEST_PHONE_NUMBER_ID;
+      }
+      if (!primaryWa.wabaId) {
+        accUpdates.wabaId = META_TEST_WABA_ID;
+      }
+      if (!primaryWa.displayPhoneNumber) {
+        accUpdates.displayPhoneNumber = META_TEST_DISPLAY_PHONE;
+      }
+      if (!primaryWa.metaAppId || primaryWa.metaAppId === '1420003542794708') {
+        accUpdates.metaAppId = DEFAULT_META_APP_ID;
+      }
+      if (
+        !primaryWa.embeddedSignupConfigId ||
+        primaryWa.embeddedSignupConfigId === '47642322601105412835405203476567'
+      ) {
+        accUpdates.embeddedSignupConfigId = DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
+      }
+      if (primaryWa.accessToken && primaryWa.connectionStatus === 'CONNECTED') {
         hasVerifiedAccount = true;
-        const accUpdates = {};
-        if (!isEncryptedSecret(acc.accessToken)) {
-          accUpdates.accessToken = encryptSecret(acc.accessToken);
-        }
-        if (acc.metaAppId !== DEFAULT_META_APP_ID) {
-          accUpdates.metaAppId = DEFAULT_META_APP_ID;
-        }
-        if (acc.embeddedSignupConfigId !== DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID) {
-          accUpdates.embeddedSignupConfigId = DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID;
-        }
-        if (Object.keys(accUpdates).length > 0) {
-          await WhatsAppAccount.findOneAndUpdate({ id: acc.id }, { $set: accUpdates });
-        }
+      }
+      if (Object.keys(accUpdates).length > 0) {
+        await WhatsAppAccount.findOneAndUpdate({ id: 'primary' }, { $set: accUpdates });
       }
     }
 
@@ -822,12 +879,21 @@ export async function purgeLegacyFakeDataAndEnsureDefaults() {
       delete cleanWaData.n8nEnabled;
       delete cleanWaData.n8nWebhookUrl;
       delete cleanWaData.n8nForwardingEnabled;
+      if (!cleanWaData.phoneNumberId) {
+        cleanWaData.phoneNumberId = META_TEST_PHONE_NUMBER_ID;
+      }
+      if (!cleanWaData.businessAccountId) {
+        cleanWaData.businessAccountId = META_TEST_WABA_ID;
+      }
+      if (!cleanWaData.displayPhoneNumber) {
+        cleanWaData.displayPhoneNumber = META_TEST_DISPLAY_PHONE;
+      }
+      if (!cleanWaData.metaAppId) {
+        cleanWaData.metaAppId = DEFAULT_META_APP_ID;
+      }
       if (!hasVerifiedAccount && cleanWaData.isConnected) {
-        cleanWaData.phoneNumberId = '';
-        cleanWaData.businessAccountId = '';
-        cleanWaData.displayPhoneNumber = '';
         cleanWaData.isConnected = false;
-        cleanWaData.lastWebhookAt = 'Awaiting connection';
+        cleanWaData.lastWebhookAt = 'Awaiting test token & webhook verification';
       }
       await Setting.findOneAndUpdate(
         { type: 'whatsappSettings' },
