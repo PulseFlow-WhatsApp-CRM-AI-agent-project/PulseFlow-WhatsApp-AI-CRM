@@ -78,9 +78,17 @@ export const CRMProvider = ({ children }) => {
   const fetchCRMData = useCallback(async (silent = false) => {
     if (!silent) setIsLoading(true);
     try {
-      const res = await fetch('/api/bootstrap', {
-        headers: { Accept: 'application/json' }
-      });
+      let savedToken = '';
+      try {
+        savedToken = localStorage.getItem('pulseflow_auth_token') || '';
+      } catch {
+        savedToken = '';
+      }
+      const headers = { Accept: 'application/json' };
+      if (savedToken) {
+        headers.Authorization = `Bearer ${savedToken}`;
+      }
+      const res = await fetch('/api/bootstrap', { headers });
       if (!res.ok) return;
       const contentType = res.headers.get('content-type') || '';
       if (!contentType.includes('application/json')) return;
@@ -384,6 +392,7 @@ export const CRMProvider = ({ children }) => {
         try {
           localStorage.setItem('pulseflow_auth_token', data.token);
           localStorage.setItem('pulseflow_auth_user', JSON.stringify(data.user));
+          fetchCRMData(true);
         } catch {
           // ignore
         }

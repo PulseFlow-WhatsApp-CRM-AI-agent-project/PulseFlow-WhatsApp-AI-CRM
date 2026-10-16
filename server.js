@@ -3672,7 +3672,7 @@ app.get('/api/bootstrap', async (req, res) => {
       }
     }
 
-    const sysCfg = await getRuntimeSystemConfig(_req);
+    const sysCfg = await getRuntimeSystemConfig(req);
     const sanitizedSys = buildSanitizedSystemConfig(sysCfg);
 
     const rawAiSettings =
