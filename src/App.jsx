@@ -9,6 +9,7 @@ import {
   ForgotPasswordPage,
   ResetPasswordPage
 } from './pages/AuthPages';
+import { PrivacyPolicyPage, TermsOfServicePage } from './pages/LegalPages';
 import { DashboardPage } from './pages/DashboardPage';
 import { WhatsAppInboxPage } from './pages/WhatsAppInboxPage';
 import { AIInsightsPage } from './pages/AIInsightsPage';
@@ -94,6 +95,10 @@ export function App() {
           <Route path="/register" element={<RegisterPage />} />
           <Route path="/forgot-password" element={<ForgotPasswordPage />} />
           <Route path="/reset-password" element={<ResetPasswordPage />} />
+          <Route path="/privacy" element={<PrivacyPolicyPage />} />
+          <Route path="/privacy-policy" element={<PrivacyPolicyPage />} />
+          <Route path="/terms" element={<TermsOfServicePage />} />
+          <Route path="/terms-of-service" element={<TermsOfServicePage />} />
 
           {/* Root URL Redirect: / -> /login if unauthenticated, /dashboard if authenticated */}
           <Route path="/" element={<RootRedirect />} />

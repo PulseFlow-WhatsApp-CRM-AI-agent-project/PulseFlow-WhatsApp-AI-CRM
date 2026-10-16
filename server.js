@@ -337,15 +337,25 @@ async function getRuntimeSystemConfig(req = null) {
     .replace(/^\/+|\/+$/g, '');
   if (!whatsappApiVersion.startsWith('v')) whatsappApiVersion = `v${whatsappApiVersion}`;
 
-  const fallbackOrigin = req
-    ? `${req.protocol}://${req.get('host')}`
-    : 'https://pulseflow-whatsapp-ai-crm-web.onrender.com';
+  const reqHost = req ? (req.get('x-forwarded-host') || req.get('host')) : '';
+  const reqProto = req ? (req.get('x-forwarded-proto') || req.protocol || 'https') : 'https';
+  const dynamicOrigin = reqHost ? `${reqProto}://${reqHost}` : '';
+
+  const fallbackOrigin = dynamicOrigin || 'https://pulseflow-whatsapp-ai-crm-web.onrender.com';
+
+  const configuredBackend = (process.env.BACKEND_URL || '').trim();
+  const configuredAppUrl = (process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL' ? process.env.APP_URL : '').trim();
 
   const publicAppUrl = String(
-    sysDoc?.publicAppUrl ||
-      (process.env.BACKEND_URL || '').trim() ||
-      (process.env.APP_URL && process.env.APP_URL !== 'MY_APP_URL' ? process.env.APP_URL : '') ||
-      fallbackOrigin
+    sysDoc?.publicAppUrl && !sysDoc.publicAppUrl.includes('localhost')
+      ? sysDoc.publicAppUrl
+      : dynamicOrigin && !dynamicOrigin.includes('localhost')
+      ? dynamicOrigin
+      : configuredBackend && !configuredBackend.includes('localhost')
+      ? configuredBackend
+      : configuredAppUrl && !configuredAppUrl.includes('localhost')
+      ? configuredAppUrl
+      : dynamicOrigin || configuredBackend || fallbackOrigin
   )
     .trim()
     .replace(/\/+$/, '');
@@ -1696,6 +1706,15 @@ async function handleWebhookVerify(req, res) {
   const mode = req.query['hub.mode'];
   const token = req.query['hub.verify_token'];
   const challenge = req.query['hub.challenge'];
+
+  // If probe arrives without hub.mode, return 200 OK informative status rather than 403
+  if (!mode) {
+    return res.status(200).json({
+      status: 'active',
+      service: 'PulseFlow WhatsApp Webhook',
+      verification: 'Awaiting Meta hub.mode and hub.verify_token'
+    });
+  }
 
   const tokenStr = Array.isArray(token)
     ? String(token[token.length - 1] ?? '')
@@ -3595,10 +3614,11 @@ function computeDynamicFindings(leads, contacts, conversations) {
   return findings;
 }
 
-// 1. Bootstrap all CRM state from MongoDB
-app.get('/api/bootstrap', async (_req, res) => {
+// 1. Bootstrap CRM state from MongoDB (Secured: private customer data only returned when authenticated)
+app.get('/api/bootstrap', async (req, res) => {
   try {
     await connectDB();
+    const authUser = await resolveAuthenticatedUser(req);
 
     const [
       teamDocs,
@@ -3613,36 +3633,42 @@ app.get('/api/bootstrap', async (_req, res) => {
       notifDocs
     ] = await Promise.all([
       TeamMember.find({}).sort({ _id: 1 }),
-      Contact.find({}).sort({ _id: -1 }),
-      Lead.find({}).sort({ leadScore: -1, _id: -1 }),
-      Conversation.find({}).sort({ _id: -1 }),
-      Message.find({}).sort({ createdAt: 1, _id: 1 }),
-      FollowUp.find({}).sort({ date: 1, time: 1 }),
-      KnowledgeBase.find({}).sort({ _id: -1 }),
-      KnowledgeGap.find({}).sort({ _id: -1 }),
+      authUser ? Contact.find({}).sort({ _id: -1 }) : Promise.resolve([]),
+      authUser ? Lead.find({}).sort({ leadScore: -1, _id: -1 }) : Promise.resolve([]),
+      authUser ? Conversation.find({}).sort({ _id: -1 }) : Promise.resolve([]),
+      authUser ? Message.find({}).sort({ createdAt: 1, _id: 1 }) : Promise.resolve([]),
+      authUser ? FollowUp.find({}).sort({ date: 1, time: 1 }) : Promise.resolve([]),
+      authUser ? KnowledgeBase.find({}).sort({ _id: -1 }) : Promise.resolve([]),
+      authUser ? KnowledgeGap.find({}).sort({ _id: -1 }) : Promise.resolve([]),
       Setting.find({}),
-      Notification.find({}).sort({ createdAt: -1, _id: -1 })
+      authUser ? Notification.find({}).sort({ createdAt: -1, _id: -1 }) : Promise.resolve([])
     ]);
 
-    const teamMembers = cleanList(teamDocs);
-    const contacts = cleanList(contactDocs);
-    const leads = cleanList(leadDocs);
-    const conversations = cleanList(convDocs);
-    const messages = cleanList(msgDocs);
-    const followUps = cleanList(followUpDocs);
-    const knowledgeBase = cleanList(kbDocs);
-    const knowledgeGaps = cleanList(gapDocs);
-    const notifications = cleanList(notifDocs);
+    // For login quick-fill helper, only provide safe minimal public identifiers (id, name, email, role)
+    const teamMembers = authUser
+      ? cleanList(teamDocs)
+      : teamDocs.map((t) => ({ id: t.id, name: t.name, email: t.email, role: t.role }));
+
+    const contacts = authUser ? cleanList(contactDocs) : [];
+    const leads = authUser ? cleanList(leadDocs) : [];
+    const conversations = authUser ? cleanList(convDocs) : [];
+    const messages = authUser ? cleanList(msgDocs) : [];
+    const followUps = authUser ? cleanList(followUpDocs) : [];
+    const knowledgeBase = authUser ? cleanList(kbDocs) : [];
+    const knowledgeGaps = authUser ? cleanList(gapDocs) : [];
+    const notifications = authUser ? cleanList(notifDocs) : [];
 
     const messagesByConv = {};
-    for (const c of conversations) {
-      messagesByConv[c.id] = [];
-    }
-    for (const m of messages) {
-      const cid = m.conversationId || m.convId;
-      if (cid) {
-        if (!messagesByConv[cid]) messagesByConv[cid] = [];
-        messagesByConv[cid].push(m);
+    if (authUser) {
+      for (const c of conversations) {
+        messagesByConv[c.id] = [];
+      }
+      for (const m of messages) {
+        const cid = m.conversationId || m.convId;
+        if (cid) {
+          if (!messagesByConv[cid]) messagesByConv[cid] = [];
+          messagesByConv[cid].push(m);
+        }
       }
     }
 
@@ -4093,7 +4119,7 @@ app.delete('/api/team/:id', requireAdmin, async (req, res) => {
 });
 
 // 3. Contacts CRUD
-app.post('/api/contacts', async (req, res) => {
+app.post('/api/contacts', requireAuth, async (req, res) => {
   try {
     const todayStr = new Date().toISOString().slice(0, 10);
     const nowStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -4186,7 +4212,7 @@ app.post('/api/contacts', async (req, res) => {
   }
 });
 
-app.patch('/api/contacts/:id', async (req, res) => {
+app.patch('/api/contacts/:id', requireAuth, async (req, res) => {
   try {
     const updated = await Contact.findOneAndUpdate(
       { id: req.params.id },
@@ -4199,7 +4225,7 @@ app.patch('/api/contacts/:id', async (req, res) => {
   }
 });
 
-app.delete('/api/contacts/:id', async (req, res) => {
+app.delete('/api/contacts/:id', requireAuth, async (req, res) => {
   try {
     const contactId = req.params.id;
     const convs = await Conversation.find({ contactId });
@@ -4217,7 +4243,7 @@ app.delete('/api/contacts/:id', async (req, res) => {
   }
 });
 
-app.post('/api/contacts/:id/notes', async (req, res) => {
+app.post('/api/contacts/:id/notes', requireAuth, async (req, res) => {
   try {
     const note = {
       id: `cn-${Date.now()}`,
@@ -4237,7 +4263,7 @@ app.post('/api/contacts/:id/notes', async (req, res) => {
 });
 
 // 4. Leads CRUD & Real-Time Hot Lead Alerts
-app.get('/api/leads/hot-alerts', async (req, res) => {
+app.get('/api/leads/hot-alerts', requireAuth, async (req, res) => {
   try {
     await connectDB();
     const userId = String(req.query.userId || 'admin-1');
@@ -4298,7 +4324,7 @@ app.get('/api/leads/hot-alerts', async (req, res) => {
   }
 });
 
-app.post('/api/leads/hot-alerts/acknowledge', async (req, res) => {
+app.post('/api/leads/hot-alerts/acknowledge', requireAuth, async (req, res) => {
   try {
     await connectDB();
     const userId = String(req.body?.userId || 'admin-1');
@@ -5047,6 +5073,52 @@ app.use((err, req, res, next) => {
   console.error('[server error]', err);
   res.status(500).json({ error: err.message || 'Internal Server Error' });
 });
+
+// Explicit robots.txt route for Meta crawlers, search engines, and compliance
+const ROBOTS_TXT_BODY = `User-agent: facebookexternalhit
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: Facebot
+Allow: /
+
+User-agent: WhatsApp
+Allow: /
+
+User-agent: Twitterbot
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /dashboard
+Disallow: /inbox
+Disallow: /conversations
+Disallow: /contacts
+Disallow: /leads
+Disallow: /settings
+Disallow: /team
+Disallow: /ai-settings
+Disallow: /whatsapp-settings
+`;
+
+app.get('/robots.txt', (_req, res) => {
+  res.type('text/plain; charset=UTF-8').send(ROBOTS_TXT_BODY);
+});
+
+// Serve assets from /public directly (e.g. bg.webp, icons)
+const PUBLIC_DIR = path.join(__dirname, 'public');
+if (fs.existsSync(PUBLIC_DIR)) {
+  app.use(express.static(PUBLIC_DIR));
+}
 
 // ============================================================================
 // FRONTEND SERVING (STATIC DIST IN PROD, VITE MIDDLEWARE IN DEV)

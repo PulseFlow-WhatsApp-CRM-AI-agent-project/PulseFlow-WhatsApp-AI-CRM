@@ -208,6 +208,16 @@ export const LoginPage = () => {
               Create Team Account
             </Link>
           </p>
+
+          <div className="flex items-center justify-center gap-3 text-[11px] text-slate-500 mt-4 pt-3 border-t border-slate-200/60">
+            <Link to="/privacy" className="hover:text-slate-800 transition underline underline-offset-2">
+              Privacy Policy
+            </Link>
+            <span>•</span>
+            <Link to="/terms" className="hover:text-slate-800 transition underline underline-offset-2">
+              Terms of Service
+            </Link>
+          </div>
         </div>
       </div>
     </div>

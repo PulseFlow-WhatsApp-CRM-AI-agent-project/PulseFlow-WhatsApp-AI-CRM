@@ -1,0 +1,37 @@
+# PulseFlow WhatsApp AI CRM - Robots Exclusion Configuration
+# Allow legitimate search engines and social sharing crawlers to scrape public preview metadata
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: Facebot
+Allow: /
+
+User-agent: WhatsApp
+Allow: /
+
+User-agent: Twitterbot
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+# Default rules for all other crawlers
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /dashboard
+Disallow: /inbox
+Disallow: /conversations
+Disallow: /contacts
+Disallow: /leads
+Disallow: /settings
+Disallow: /team
+Disallow: /ai-settings
+Disallow: /whatsapp-settings
