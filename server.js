@@ -48,6 +48,159 @@ const WEBHOOK_PATHS = new Set(['/webhook', '/api/webhooks/whatsapp', '/health'])
 const app = express();
 app.disable('x-powered-by');
 
+// ============================================================================
+// TOP-LEVEL IMMEDIATE CRAWLER & PUBLIC ASSET BYPASS
+// Runs BEFORE body parsing, database connection, or any API routes.
+// Guarantees an immediate 200 OK with full Open Graph meta tags and permissive
+// headers to facebookexternalhit, Facebot, and all social crawlers requesting '/'
+// or public pages. Completely prevents 403 Forbidden errors.
+// ============================================================================
+const META_CRAWLER_REGEX =
+  /facebookexternalhit|facebookcatalog|meta-externalagent|meta-externalfetcher|meta-webindexer|meta-externalads|Facebot|FacebookBot|WhatsApp|Twitterbot|LinkedInBot|Slackbot|Googlebot/i;
+
+const ROBOTS_TXT_BODY = `# PulseFlow WhatsApp AI CRM - Robots Exclusion Configuration
+# Allow legitimate search engines and social sharing crawlers to scrape public preview metadata
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: facebookcatalog
+Allow: /
+
+User-agent: meta-externalagent
+Allow: /
+
+User-agent: meta-externalfetcher
+Allow: /
+
+User-agent: meta-webindexer
+Allow: /
+
+User-agent: meta-externalads
+Allow: /
+
+User-agent: Facebot
+Allow: /
+
+User-agent: FacebookBot
+Allow: /
+
+User-agent: WhatsApp
+Allow: /
+
+User-agent: Twitterbot
+Allow: /
+
+User-agent: LinkedInBot
+Allow: /
+
+User-agent: Slackbot
+Allow: /
+
+User-agent: Googlebot
+Allow: /
+
+# General rules for other automated crawlers
+User-agent: *
+Allow: /
+Disallow: /api/
+Disallow: /dashboard
+Disallow: /inbox
+Disallow: /conversations
+Disallow: /contacts
+Disallow: /leads
+Disallow: /settings
+Disallow: /team
+Disallow: /ai-settings
+Disallow: /whatsapp-settings
+`;
+
+let cachedIndexHtml = '';
+function getPublicIndexHtml() {
+  if (cachedIndexHtml && IS_PRODUCTION) return cachedIndexHtml;
+  try {
+    const prodPath = path.join(DIST_DIR, 'index.html');
+    if (fs.existsSync(prodPath)) {
+      cachedIndexHtml = fs.readFileSync(prodPath, 'utf8');
+      return cachedIndexHtml;
+    }
+    const devPath = path.join(__dirname, 'index.html');
+    if (fs.existsSync(devPath)) {
+      cachedIndexHtml = fs.readFileSync(devPath, 'utf8');
+      return cachedIndexHtml;
+    }
+  } catch (err) {
+    console.warn('[server] Error reading index.html:', err.message);
+  }
+  return '<!doctype html><html><head><title>PulseFlow WhatsApp AI CRM</title></head><body><div id="root"></div></body></html>';
+}
+
+app.use((req, res, next) => {
+  const userAgent = req.get('user-agent') || '';
+  const isSocialCrawler = META_CRAWLER_REGEX.test(userAgent);
+  req.isSocialCrawler = isSocialCrawler;
+
+  // 1. Immediate OPTIONS preflight handler
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range, X-Requested-With');
+    return res.sendStatus(204);
+  }
+
+  // 2. Immediate robots.txt handler
+  if (req.path === '/robots.txt') {
+    res.setHeader('Cache-Control', 'public, max-age=86400');
+    res.setHeader('Content-Type', 'text/plain; charset=UTF-8');
+    res.setHeader('X-Robots-Tag', 'all');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    if (req.method === 'HEAD') {
+      return res.status(200).end();
+    }
+    return res.status(200).send(ROBOTS_TXT_BODY);
+  }
+
+  // 3. Immediate /bg.webp serving (Open Graph image requested by crawlers)
+  if ((req.method === 'GET' || req.method === 'HEAD') && req.path === '/bg.webp') {
+    const bgPath = fs.existsSync(path.join(DIST_DIR, 'bg.webp'))
+      ? path.join(DIST_DIR, 'bg.webp')
+      : path.join(__dirname, 'public', 'bg.webp');
+    if (fs.existsSync(bgPath)) {
+      res.setHeader('Content-Type', 'image/webp');
+      res.setHeader('X-Robots-Tag', 'all');
+      res.setHeader('Access-Control-Allow-Origin', '*');
+      res.setHeader('Cache-Control', 'public, max-age=86400');
+      if (req.method === 'HEAD') return res.status(200).end();
+      return res.sendFile(bgPath);
+    }
+  }
+
+  // 4. Guaranteed instant 200 OK for root path '/' or any social crawler requesting public pages
+  const isRootPath = req.path === '/' || req.path === '';
+  const isPublicNonApi = !req.path.startsWith('/api') && !WEBHOOK_PATHS.has(req.path);
+  const shouldServeIndexDirectly =
+    (req.method === 'GET' || req.method === 'HEAD') &&
+    (isRootPath || (isSocialCrawler && isPublicNonApi));
+
+  if (shouldServeIndexDirectly) {
+    const html = getPublicIndexHtml();
+    res.setHeader('Content-Type', 'text/html; charset=UTF-8');
+    res.setHeader('X-Robots-Tag', 'all');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range, Authorization, X-Requested-With');
+    res.setHeader('Cache-Control', 'public, max-age=0, must-revalidate');
+
+    if (req.method === 'HEAD') {
+      return res.status(200).end();
+    }
+    return res.status(200).send(html);
+  }
+
+  // Continue to JSON parsing and internal routes
+  next();
+});
+
 // Capture raw bytes for X-Hub-Signature-256 verification
 app.use(
   express.json({
@@ -58,39 +211,6 @@ app.use(
   })
 );
 app.use(express.urlencoded({ extended: true }));
-
-// ============================================================================
-// META / SOCIAL SHARING CRAWLER DETECTION & BOT ALLOWLIST MIDDLEWARE
-// Ensures that Meta's scraper (facebookexternalhit, Facebot, meta-externalagent)
-// and search engines are never blocked with 403 Forbidden or CORS issues.
-// Sets permissive crawler headers, handles HEAD/GET, and bypasses auth.
-// ============================================================================
-const META_CRAWLER_REGEX =
-  /facebookexternalhit|facebookcatalog|meta-externalagent|meta-externalfetcher|meta-webindexer|meta-externalads|Facebot|FacebookBot|WhatsApp|Twitterbot|LinkedInBot|Slackbot|Googlebot/i;
-
-app.use((req, res, next) => {
-  const userAgent = req.get('user-agent') || '';
-  const isSocialCrawler = META_CRAWLER_REGEX.test(userAgent);
-  req.isSocialCrawler = isSocialCrawler;
-
-  if (isSocialCrawler) {
-    // Explicitly allow crawling and framing for previews
-    res.setHeader('X-Robots-Tag', 'all');
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range, Authorization, X-Requested-With');
-  }
-
-  // Handle CORS preflight cleanly across all endpoints
-  if (req.method === 'OPTIONS') {
-    res.setHeader('Access-Control-Allow-Origin', '*');
-    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
-    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range, X-Requested-With');
-    return res.sendStatus(204);
-  }
-
-  next();
-});
 
 // Constant-time string comparison
 function safeCompare(a, b) {
@@ -5105,77 +5225,6 @@ app.use((err, req, res, next) => {
   }
   console.error('[server error]', err);
   res.status(500).json({ error: err.message || 'Internal Server Error' });
-});
-
-// Explicit robots.txt route for Meta crawlers, search engines, and compliance
-const ROBOTS_TXT_BODY = `# PulseFlow WhatsApp AI CRM - Robots Exclusion Configuration
-# Allow legitimate search engines and social sharing crawlers to scrape public preview metadata
-
-User-agent: facebookexternalhit
-Allow: /
-
-User-agent: facebookcatalog
-Allow: /
-
-User-agent: meta-externalagent
-Allow: /
-
-User-agent: meta-externalfetcher
-Allow: /
-
-User-agent: meta-webindexer
-Allow: /
-
-User-agent: meta-externalads
-Allow: /
-
-User-agent: Facebot
-Allow: /
-
-User-agent: FacebookBot
-Allow: /
-
-User-agent: WhatsApp
-Allow: /
-
-User-agent: Twitterbot
-Allow: /
-
-User-agent: LinkedInBot
-Allow: /
-
-User-agent: Slackbot
-Allow: /
-
-User-agent: Googlebot
-Allow: /
-
-# General rules for other automated crawlers
-User-agent: *
-Allow: /
-Disallow: /api/
-Disallow: /dashboard
-Disallow: /inbox
-Disallow: /conversations
-Disallow: /contacts
-Disallow: /leads
-Disallow: /settings
-Disallow: /team
-Disallow: /ai-settings
-Disallow: /whatsapp-settings
-`;
-
-app.all('/robots.txt', (req, res) => {
-  if (req.method !== 'GET' && req.method !== 'HEAD') {
-    return res.status(405).type('text/plain').send('Method Not Allowed');
-  }
-  res.setHeader('Cache-Control', 'public, max-age=86400');
-  res.setHeader('Content-Type', 'text/plain; charset=UTF-8');
-  res.setHeader('X-Robots-Tag', 'all');
-  if (req.method === 'HEAD') {
-    return res.status(200).end();
-  }
-  return res.status(200).send(ROBOTS_TXT_BODY);
 });
 
 // Serve assets from /public directly (e.g. bg.webp, icons)
