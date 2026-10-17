@@ -1337,7 +1337,7 @@ export const WhatsAppIntegrationSection = ({ compact = false }) => {
   const [fbSdkLoaded, setFbSdkLoaded] = useState(false);
   const [onboardingError, setOnboardingError] = useState('');
 
-  const DEFAULT_META_APP_ID = '1640164817625713';
+  const DEFAULT_META_APP_ID = '1550563807097727';
   const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
   const TEST_PHONE_DISPLAY = '+1 (555) 639-1516';
   const TEST_PHONE_NUMBER_ID = '1346163251921781';

@@ -639,7 +639,7 @@ class InMemoryCollection {
 }
 
 // Instantiate in-memory collections with Meta Official Test Number metadata (isConnected: false until verified)
-export const DEFAULT_META_APP_ID = '1640164817625713';
+export const DEFAULT_META_APP_ID = '1550563807097727';
 export const DEFAULT_EMBEDDED_SIGNUP_CONFIG_ID = '1105412835405203';
 export const META_TEST_PHONE_NUMBER_ID = '1346163251921781';
 export const META_TEST_WABA_ID = '1117283247416297';

@@ -59,6 +59,39 @@ app.use(
 );
 app.use(express.urlencoded({ extended: true }));
 
+// ============================================================================
+// META / SOCIAL SHARING CRAWLER DETECTION & BOT ALLOWLIST MIDDLEWARE
+// Ensures that Meta's scraper (facebookexternalhit, Facebot, meta-externalagent)
+// and search engines are never blocked with 403 Forbidden or CORS issues.
+// Sets permissive crawler headers, handles HEAD/GET, and bypasses auth.
+// ============================================================================
+const META_CRAWLER_REGEX =
+  /facebookexternalhit|facebookcatalog|meta-externalagent|meta-externalfetcher|meta-webindexer|meta-externalads|Facebot|FacebookBot|WhatsApp|Twitterbot|LinkedInBot|Slackbot|Googlebot/i;
+
+app.use((req, res, next) => {
+  const userAgent = req.get('user-agent') || '';
+  const isSocialCrawler = META_CRAWLER_REGEX.test(userAgent);
+  req.isSocialCrawler = isSocialCrawler;
+
+  if (isSocialCrawler) {
+    // Explicitly allow crawling and framing for previews
+    res.setHeader('X-Robots-Tag', 'all');
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Range, Authorization, X-Requested-With');
+  }
+
+  // Handle CORS preflight cleanly across all endpoints
+  if (req.method === 'OPTIONS') {
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, HEAD, POST, PUT, PATCH, DELETE, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, Range, X-Requested-With');
+    return res.sendStatus(204);
+  }
+
+  next();
+});
+
 // Constant-time string comparison
 function safeCompare(a, b) {
   if (typeof a !== 'string' || typeof b !== 'string') return false;
@@ -5075,13 +5108,31 @@ app.use((err, req, res, next) => {
 });
 
 // Explicit robots.txt route for Meta crawlers, search engines, and compliance
-const ROBOTS_TXT_BODY = `User-agent: facebookexternalhit
+const ROBOTS_TXT_BODY = `# PulseFlow WhatsApp AI CRM - Robots Exclusion Configuration
+# Allow legitimate search engines and social sharing crawlers to scrape public preview metadata
+
+User-agent: facebookexternalhit
+Allow: /
+
+User-agent: facebookcatalog
 Allow: /
 
 User-agent: meta-externalagent
 Allow: /
 
+User-agent: meta-externalfetcher
+Allow: /
+
+User-agent: meta-webindexer
+Allow: /
+
+User-agent: meta-externalads
+Allow: /
+
 User-agent: Facebot
+Allow: /
+
+User-agent: FacebookBot
 Allow: /
 
 User-agent: WhatsApp
@@ -5093,9 +5144,13 @@ Allow: /
 User-agent: LinkedInBot
 Allow: /
 
+User-agent: Slackbot
+Allow: /
+
 User-agent: Googlebot
 Allow: /
 
+# General rules for other automated crawlers
 User-agent: *
 Allow: /
 Disallow: /api/
@@ -5110,8 +5165,17 @@ Disallow: /ai-settings
 Disallow: /whatsapp-settings
 `;
 
-app.get('/robots.txt', (_req, res) => {
-  res.type('text/plain; charset=UTF-8').send(ROBOTS_TXT_BODY);
+app.all('/robots.txt', (req, res) => {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    return res.status(405).type('text/plain').send('Method Not Allowed');
+  }
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.setHeader('Content-Type', 'text/plain; charset=UTF-8');
+  res.setHeader('X-Robots-Tag', 'all');
+  if (req.method === 'HEAD') {
+    return res.status(200).end();
+  }
+  return res.status(200).send(ROBOTS_TXT_BODY);
 });
 
 // Serve assets from /public directly (e.g. bg.webp, icons)
@@ -5128,14 +5192,15 @@ async function startServer() {
   if (IS_PRODUCTION && hasDist) {
     app.use(express.static(DIST_DIR));
 
-    app.get(/.*/, (req, res, next) => {
+    app.all(/.*/, (req, res, next) => {
       if (
-        req.method !== 'GET' ||
+        (req.method !== 'GET' && req.method !== 'HEAD') ||
         req.path.startsWith('/api') ||
         WEBHOOK_PATHS.has(req.path)
       ) {
         return next();
       }
+      res.setHeader('X-Robots-Tag', 'all');
       res.sendFile(path.join(DIST_DIR, 'index.html'));
     });
   } else {
@@ -5179,7 +5244,7 @@ async function startServer() {
       const url = req.originalUrl;
       // Do not return index.html for API routes, webhooks, or file requests with extensions
       if (
-        req.method !== 'GET' ||
+        (req.method !== 'GET' && req.method !== 'HEAD') ||
         url.startsWith('/api') ||
         WEBHOOK_PATHS.has(url) ||
         /\.[a-zA-Z0-9]+$/.test(req.path)
@@ -5192,6 +5257,7 @@ async function startServer() {
       try {
         let template = fs.readFileSync(path.resolve(__dirname, 'index.html'), 'utf-8');
         template = await vite.transformIndexHtml(url, template);
+        res.setHeader('X-Robots-Tag', 'all');
         res.status(200).set({ 'Content-Type': 'text/html; charset=utf-8' }).end(template);
       } catch (e) {
         vite.ssrFixStacktrace(e);

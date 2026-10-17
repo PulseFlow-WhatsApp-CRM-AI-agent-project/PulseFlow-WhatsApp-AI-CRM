@@ -4,10 +4,25 @@
 User-agent: facebookexternalhit
 Allow: /
 
+User-agent: facebookcatalog
+Allow: /
+
 User-agent: meta-externalagent
 Allow: /
 
+User-agent: meta-externalfetcher
+Allow: /
+
+User-agent: meta-webindexer
+Allow: /
+
+User-agent: meta-externalads
+Allow: /
+
 User-agent: Facebot
+Allow: /
+
+User-agent: FacebookBot
 Allow: /
 
 User-agent: WhatsApp
@@ -19,10 +34,13 @@ Allow: /
 User-agent: LinkedInBot
 Allow: /
 
+User-agent: Slackbot
+Allow: /
+
 User-agent: Googlebot
 Allow: /
 
-# Default rules for all other crawlers
+# General rules for other automated crawlers
 User-agent: *
 Allow: /
 Disallow: /api/

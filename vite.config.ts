@@ -15,6 +15,9 @@ export default defineConfig(() => {
       allowedHosts: [
         'localhost',
         '127.0.0.1',
+        '1a3e-2405-201-f002-5a76-d10-c446-bea2-fc6a.ngrok-free.app',
+        '.ngrok-free.app',
+        '.ngrok.app',
         'pulseflow-whatsapp-ai-crm-web.onrender.com',
         '.onrender.com',
         '.run.app',
